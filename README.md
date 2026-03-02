@@ -14,16 +14,19 @@ bash install.sh
 
 ```
 dotfiles/
-├── install.sh                  # Setup script (auto-detects OS)
+├── install.sh                      # Setup script (auto-detects OS)
 └── claude/
-    ├── CLAUDE.md               # Global instructions for Claude Code
-    ├── keybindings.json        # Key bindings
-    ├── agents/                 # Custom agent definitions
-    ├── skills/                 # Custom skills
+    ├── CLAUDE.md                   # Global instructions for Claude Code
+    ├── keybindings.json            # Key bindings
+    ├── agents/                     # Custom agent definitions
+    ├── skills/                     # Custom skills
     ├── hooks/
-    │   └── wsl/                # WSL-specific hooks (Windows notifications)
+    │   ├── common/                 # Shared across all platforms
+    │   ├── wsl/                    # WSL-specific (Windows notifications)
+    │   └── mac/                    # macOS-specific (osascript notifications)
     └── settings/
-        └── wsl.json            # WSL settings template
+        ├── wsl.json                # WSL settings template
+        └── mac.json                # macOS settings template
 ```
 
 ## Platform support
@@ -31,4 +34,4 @@ dotfiles/
 | Platform | Status |
 |---|---|
 | WSL (Windows) | ✅ |
-| macOS | 🚧 Coming soon |
+| macOS | ✅ |

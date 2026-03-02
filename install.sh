@@ -33,7 +33,8 @@ ln -sf "$DOTFILES_DIR/claude/skills/review-pr/SKILL.md"        "$CLAUDE_DIR/skil
 # Platform-specific setup
 case "$OS" in
     wsl)
-        for hook in "$DOTFILES_DIR/claude/hooks/wsl/"*.sh; do
+        for hook in "$DOTFILES_DIR/claude/hooks/wsl/"*.sh \
+                    "$DOTFILES_DIR/claude/hooks/common/"*.sh; do
             ln -sf "$hook" "$HOOKS_DIR/$(basename "$hook")"
         done
         sed "s|__HOOKS_DIR__|$HOOKS_DIR|g" \
@@ -42,7 +43,13 @@ case "$OS" in
         echo "WSL setup complete."
         ;;
     mac)
-        echo "Mac: settings.json は未設定です。手動でセットアップしてください。"
+        for hook in "$DOTFILES_DIR/claude/hooks/mac/"*.sh \
+                    "$DOTFILES_DIR/claude/hooks/common/"*.sh; do
+            ln -sf "$hook" "$HOOKS_DIR/$(basename "$hook")"
+        done
+        sed "s|__HOOKS_DIR__|$HOOKS_DIR|g" \
+            "$DOTFILES_DIR/claude/settings/mac.json" > "$CLAUDE_DIR/settings.json"
+        echo "Mac setup complete."
         ;;
     *)
         echo "Unsupported OS: $OS"
