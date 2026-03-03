@@ -12,7 +12,7 @@ bash install.sh
 
 ## Structure
 
-```
+```text
 dotfiles/
 ├── install.sh                      # Setup script (auto-detects OS)
 └── claude/
@@ -32,7 +32,7 @@ dotfiles/
 ## Platform support
 
 | Platform | Status |
-|---|---|
+| --- | --- |
 | WSL (Windows) | ✅ |
 | macOS | ✅ |
 
