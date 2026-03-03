@@ -48,4 +48,17 @@ sudo apt install -y bubblewrap socat
 npm install -g @anthropic-ai/sandbox-runtime
 ```
 
-`install.sh` は `@anthropic-ai/sandbox-runtime` を自動検出し、seccomp の設定を書き込みます。インストール後に `install.sh` を再実行すれば設定されます。
+`install.sh` は `@anthropic-ai/sandbox-runtime` を自動検出し、Volta のパッケージパスから `npm root -g` のパスへ symlink を作成します。インストール後に `install.sh` を再実行すれば設定されます。
+
+> **Note:** Volta を使用していない場合、`npm install -g @anthropic-ai/sandbox-runtime` だけで自動検出されるため symlink 作成はスキップされます。
+
+## Security
+
+`claude/hooks/common/` には全プラットフォーム共通のセキュリティ hook が含まれます。
+
+| Hook | 対象ツール | 内容 |
+| --- | --- | --- |
+| `block-dotenv.sh` | Read / Edit / Write / MultiEdit / NotebookEdit | `.env`・`.env.?*`・`.envrc` へのアクセスをブロック |
+| `block-rm-rf.sh` | Bash | `rm -rf` / `rm -fr` の実行をブロック |
+
+> **Note:** Claude Code の glob パターン（`deny` ルール）は Linux / macOS で `.env.*` を正しく展開できないため、hook で代替しています。

@@ -35,17 +35,11 @@
     ],
     "deny": [
       "Read(.env)",
-      "Read(.env.*)",
       "Edit(.env)",
-      "Edit(.env.*)",
       "Write(.env)",
-      "Write(.env.*)",
       "Read(~/.ssh/**)",
       "Read(~/.aws/**)",
       "Bash(rm *)",
-      "Bash(rm -r *)",
-      "Bash(rm -rf *)",
-      "Bash(rm -fr *)",
       "Bash(find * -delete*)",
       "Bash(rsync * --delete*)",
       "Bash(sudo *)",
@@ -110,6 +104,51 @@
           {
             "type": "command",
             "command": "__HOOKS_DIR__/block-rm-rf.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOKS_DIR__/block-dotenv.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOKS_DIR__/block-dotenv.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOKS_DIR__/block-dotenv.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOKS_DIR__/block-dotenv.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOKS_DIR__/block-dotenv.sh"
           }
         ]
       }

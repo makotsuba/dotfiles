@@ -23,6 +23,11 @@ echo "Detected OS: $OS"
 mkdir -p "$CLAUDE_DIR/hooks" "$CLAUDE_DIR/agents" "$CLAUDE_DIR/skills/fix-issue" "$CLAUDE_DIR/skills/review-pr"
 
 # Create directories required by sandbox (must exist to be mounted/blocked)
+# bwrap cannot mount tmpfs on symlinks, so replace symlink with a real directory
+if [ -L "$HOME/.aws" ]; then
+    echo "  ~/.aws is a symlink; replacing with a real directory so bwrap can mount it..."
+    rm "$HOME/.aws"
+fi
 mkdir -p "$HOME/.aws"
 
 # Symlink shared files
@@ -36,10 +41,12 @@ ln -sf "$DOTFILES_DIR/claude/skills/review-pr/SKILL.md"        "$CLAUDE_DIR/skil
 # Platform-specific setup
 case "$OS" in
     wsl)
+        shopt -s nullglob
         for hook in "$DOTFILES_DIR/claude/hooks/wsl/"*.sh \
                     "$DOTFILES_DIR/claude/hooks/common/"*.sh; do
             ln -sf "$hook" "$HOOKS_DIR/$(basename "$hook")"
         done
+        shopt -u nullglob
         TMP=$(mktemp "$CLAUDE_DIR/settings.json.XXXXXX")
         sed "s|__HOOKS_DIR__|$HOOKS_DIR|g" \
             "$DOTFILES_DIR/claude/settings/wsl.json" > "$TMP"
@@ -47,52 +54,29 @@ case "$OS" in
         git config --global core.sshCommand ssh.exe
 
         # Configure sandbox seccomp filter (required to block unix domain sockets)
-        SEARCH_PATHS=(
-            "$HOME/.volta/tools/image/packages/@anthropic-ai/sandbox-runtime"
-            /usr/lib/node_modules/@anthropic-ai/sandbox-runtime
-            /usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime
-        )
+        # Claude Code detects @anthropic-ai/sandbox-runtime via `npm root -g`.
+        # Volta places packages under a separate path, so create a symlink.
         NPM_GLOBAL=$(npm root -g 2>/dev/null)
-        [ -n "$NPM_GLOBAL" ] && SEARCH_PATHS+=("$NPM_GLOBAL/@anthropic-ai/sandbox-runtime")
-
-        SECCOMP_BPF=$(find "${SEARCH_PATHS[@]}" -name "unix-block.bpf" -print -quit 2>/dev/null)
-        if [ -n "$SECCOMP_BPF" ] && [ -f "$(dirname "$SECCOMP_BPF")/apply-seccomp" ]; then
-            SECCOMP_DIR=$(dirname "$SECCOMP_BPF")
-            if ! command -v python3 &>/dev/null; then
-                echo "  Warning: python3 not found. Skipping seccomp configuration."
-            else
-                env CLAUDE_DIR="$CLAUDE_DIR" SECCOMP_DIR="$SECCOMP_DIR" python3 -c "
-import json, os, tempfile
-claude_dir  = os.environ['CLAUDE_DIR']
-seccomp_dir = os.environ['SECCOMP_DIR']
-settings    = f'{claude_dir}/settings.json'
-with open(settings) as f:
-    cfg = json.load(f)
-cfg.setdefault('sandbox', {}).setdefault('seccomp', {})
-cfg['sandbox']['seccomp']['bpfPath']   = f'{seccomp_dir}/unix-block.bpf'
-cfg['sandbox']['seccomp']['applyPath'] = f'{seccomp_dir}/apply-seccomp'
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings))
-try:
-    with os.fdopen(fd, 'w') as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, settings)
-except:
-    os.unlink(tmp)
-    raise
-print('  seccomp configured:', seccomp_dir)
-"
-            fi
-        else
+        VOLTA_PKG="$HOME/.volta/tools/image/packages/@anthropic-ai/sandbox-runtime/lib/node_modules/@anthropic-ai/sandbox-runtime"
+        if [ -z "$NPM_GLOBAL" ]; then
+            echo "  Warning: npm root -g failed. Skipping sandbox-runtime symlink."
+        elif [ ! -d "$VOLTA_PKG" ]; then
             echo "  Warning: @anthropic-ai/sandbox-runtime not found. Run: npm install -g @anthropic-ai/sandbox-runtime"
+        else
+            mkdir -p "$NPM_GLOBAL/@anthropic-ai"
+            ln -sfT "$VOLTA_PKG" "$NPM_GLOBAL/@anthropic-ai/sandbox-runtime"
+            echo "  seccomp: linked @anthropic-ai/sandbox-runtime into npm global path"
         fi
 
         echo "WSL setup complete."
         ;;
     mac)
+        shopt -s nullglob
         for hook in "$DOTFILES_DIR/claude/hooks/mac/"*.sh \
                     "$DOTFILES_DIR/claude/hooks/common/"*.sh; do
-            ln -sf "$hook" "$HOOKS_DIR/$(basename "$hook")"
+            ln -sfh "$hook" "$HOOKS_DIR/$(basename "$hook")"
         done
+        shopt -u nullglob
         TMP=$(mktemp "$CLAUDE_DIR/settings.json.XXXXXX")
         sed "s|__HOOKS_DIR__|$HOOKS_DIR|g" \
             "$DOTFILES_DIR/claude/settings/mac.json" > "$TMP"
