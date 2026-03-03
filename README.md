@@ -35,3 +35,7 @@ dotfiles/
 |---|---|
 | WSL (Windows) | ✅ |
 | macOS | ✅ |
+
+## Sandbox (WSL)
+
+WSL では sandbox の動作に追加の依存関係が必要です。`install.sh` 実行後、Claude Code 内で `/sandbox` を開き Dependencies タブの指示に従ってください。
