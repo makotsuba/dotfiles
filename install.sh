@@ -22,6 +22,9 @@ echo "Detected OS: $OS"
 # Create ~/.claude directories
 mkdir -p "$CLAUDE_DIR/hooks" "$CLAUDE_DIR/agents" "$CLAUDE_DIR/skills/fix-issue" "$CLAUDE_DIR/skills/review-pr"
 
+# Create directories required by sandbox (must exist to be mounted/blocked)
+mkdir -p "$HOME/.aws"
+
 # Symlink shared files
 ln -sf "$DOTFILES_DIR/claude/CLAUDE.md"                        "$CLAUDE_DIR/CLAUDE.md"
 ln -sf "$DOTFILES_DIR/claude/keybindings.json"                 "$CLAUDE_DIR/keybindings.json"
