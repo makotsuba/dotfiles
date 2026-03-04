@@ -3,6 +3,7 @@
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
     "excludedCommands": ["docker", "ssh.exe"],
     "network": {
       "allowedDomains": [
