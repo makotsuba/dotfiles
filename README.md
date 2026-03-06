@@ -12,9 +12,11 @@ Personal dotfiles – configurations for Claude Code and other tools.
 | macOS | ✅ |
 | Linux (native) | 🚧 Coming soon |
 
-### Sandbox (WSL)
+### WSL (Windows)
 
-WSL では sandbox の動作に追加の依存関係が必要です。`install.sh` を実行する前にインストールしてください。
+#### Sandbox
+
+sandbox の動作に追加の依存関係が必要です。`install.sh` を実行する前にインストールしてください。
 
 ```bash
 sudo apt install -y bubblewrap socat
@@ -24,6 +26,22 @@ npm install -g @anthropic-ai/sandbox-runtime
 `install.sh` は `@anthropic-ai/sandbox-runtime` を自動検出し、Volta のパッケージパスから `npm root -g` のパスへ symlink を作成します。
 
 > **Note:** Volta を使用していない場合、`npm install -g @anthropic-ai/sandbox-runtime` だけで自動検出されるため symlink 作成はスキップされます。
+
+#### Notifications
+
+Windows のトースト通知を受け取るには PowerShell 7 と BurntToast が必要です。
+
+PowerShell 7 のインストール：
+
+```powershell
+winget install --id Microsoft.PowerShell --source winget
+```
+
+BurntToast のインストール：
+
+```powershell
+Install-Module -Name BurntToast -Force
+```
 
 ## Setup
 
