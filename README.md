@@ -16,16 +16,14 @@ Personal dotfiles – configurations for Claude Code and other tools.
 
 #### Sandbox
 
-sandbox の動作に追加の依存関係が必要です。`install.sh` を実行する前にインストールしてください。
+以下は必須の依存関係です。`install.sh` を実行する前にインストールしてください。
+
+> **Note:** 未インストールの場合、スクリプトはエラーで終了します。
 
 ```bash
 sudo apt install -y bubblewrap socat
 npm install -g @anthropic-ai/sandbox-runtime
 ```
-
-`install.sh` は `@anthropic-ai/sandbox-runtime` を自動検出し、Volta のパッケージパスから `npm root -g` のパスへ symlink を作成します。
-
-> **Note:** Volta を使用していない場合、`npm install -g @anthropic-ai/sandbox-runtime` だけで自動検出されるため symlink 作成はスキップされます。
 
 #### Notifications
 

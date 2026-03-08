@@ -41,6 +41,25 @@ ln -sf "$DOTFILES_DIR/claude/skills/review-pr/SKILL.md"        "$CLAUDE_DIR/skil
 # Platform-specific setup
 case "$OS" in
     wsl)
+        # Pre-flight: all sandbox dependencies are required for Claude Code sandbox on WSL
+        if ! command -v bwrap &>/dev/null || ! command -v socat &>/dev/null; then
+            echo "Error: bubblewrap and socat are required." >&2
+            echo "  Run: sudo apt install -y bubblewrap socat" >&2
+            exit 1
+        fi
+        NPM_GLOBAL=$(npm root -g 2>/dev/null)
+        if [ -z "$NPM_GLOBAL" ]; then
+            echo "Error: npm root -g failed. Install Node.js before running this script." >&2
+            exit 1
+        fi
+        SANDBOX_PKG="$NPM_GLOBAL/@anthropic-ai/sandbox-runtime"
+        if [ ! -d "$SANDBOX_PKG" ]; then
+            echo "Error: @anthropic-ai/sandbox-runtime is not installed." >&2
+            echo "  Run: npm install -g @anthropic-ai/sandbox-runtime" >&2
+            exit 1
+        fi
+        echo "  seccomp: @anthropic-ai/sandbox-runtime found at $SANDBOX_PKG"
+
         shopt -s nullglob
         for hook in "$DOTFILES_DIR/claude/hooks/wsl/"*.sh \
                     "$DOTFILES_DIR/claude/hooks/common/"*.sh; do
@@ -52,21 +71,6 @@ case "$OS" in
             "$DOTFILES_DIR/claude/settings/wsl.json" > "$TMP"
         mv "$TMP" "$CLAUDE_DIR/settings.json"
         git config --global core.sshCommand ssh.exe
-
-        # Configure sandbox seccomp filter (required to block unix domain sockets)
-        # Claude Code detects @anthropic-ai/sandbox-runtime via `npm root -g`.
-        # Volta places packages under a separate path, so create a symlink.
-        NPM_GLOBAL=$(npm root -g 2>/dev/null)
-        VOLTA_PKG="$HOME/.volta/tools/image/packages/@anthropic-ai/sandbox-runtime/lib/node_modules/@anthropic-ai/sandbox-runtime"
-        if [ -z "$NPM_GLOBAL" ]; then
-            echo "  Warning: npm root -g failed. Skipping sandbox-runtime symlink."
-        elif [ ! -d "$VOLTA_PKG" ]; then
-            echo "  Warning: @anthropic-ai/sandbox-runtime not found. Run: npm install -g @anthropic-ai/sandbox-runtime"
-        else
-            mkdir -p "$NPM_GLOBAL/@anthropic-ai"
-            ln -sfT "$VOLTA_PKG" "$NPM_GLOBAL/@anthropic-ai/sandbox-runtime"
-            echo "  seccomp: linked @anthropic-ai/sandbox-runtime into npm global path"
-        fi
 
         echo "WSL setup complete."
         ;;
