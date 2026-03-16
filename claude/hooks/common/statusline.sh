@@ -1,25 +1,21 @@
 #!/bin/bash
-# Two-line statusline with visual context progress bar
+# Two-line statusline
 #
 # Line 1: Model, folder, branch
-# Line 2: Progress bar, context %, cost, duration
+# Line 2: Progress bar, context %, session time, 5h usage → reset, 7d usage → reset
 #
 # Context % uses Claude Code's pre-calculated remaining_percentage,
 # which accounts for compaction reserves. 100% = compaction fires.
+# API usage limits are fetched via OAuth API, cached for 5 minutes, non-blocking.
 
 # Read stdin (Claude Code passes JSON data via stdin)
 stdin_data=$(cat)
 
 # Single jq call - extract all values at once
-# Prefer pre-calculated remaining_percentage (100 - remaining = used toward compact)
-# Fall back to manual calc from raw tokens if not available
-IFS=$'\t' read -r current_dir model_name cost lines_added lines_removed duration_ms ctx_used cache_pct < <(
+IFS=$'\t' read -r current_dir model_name duration_ms ctx_used < <(
     echo "$stdin_data" | jq -r '[
         .workspace.current_dir // "unknown",
         .model.display_name // "Unknown",
-        (try (.cost.total_cost_usd // 0 | . * 100 | floor / 100) catch 0),
-        (.cost.total_lines_added // 0),
-        (.cost.total_lines_removed // 0),
         (.cost.total_duration_ms // 0),
         (try (
             if (.context_window.remaining_percentage // null) != null then
@@ -30,32 +26,18 @@ IFS=$'\t' read -r current_dir model_name cost lines_added lines_removed duration
                   (.context_window.current_usage.cache_read_input_tokens // 0)) * 100 /
                  .context_window.context_window_size) | floor
             else "null" end
-        ) catch "null"),
-        (try (
-            (.context_window.current_usage // {}) |
-            if (.input_tokens // 0) + (.cache_read_input_tokens // 0) > 0 then
-                ((.cache_read_input_tokens // 0) * 100 /
-                 ((.input_tokens // 0) + (.cache_read_input_tokens // 0))) | floor
-            else 0 end
-        ) catch 0)
+        ) catch "null")
     ] | @tsv'
 )
 
-# Bash-level fallback: if jq crashed entirely, extract fields individually
+# Bash-level fallback: if jq crashed entirely
 if [ -z "$current_dir" ] && [ -z "$model_name" ]; then
     current_dir=$(echo "$stdin_data" | jq -r '.workspace.current_dir // .cwd // "unknown"' 2>/dev/null)
     model_name=$(echo "$stdin_data" | jq -r '.model.display_name // "Unknown"' 2>/dev/null)
-    cost=$(echo "$stdin_data" | jq -r '(.cost.total_cost_usd // 0)' 2>/dev/null)
-    lines_added=$(echo "$stdin_data" | jq -r '(.cost.total_lines_added // 0)' 2>/dev/null)
-    lines_removed=$(echo "$stdin_data" | jq -r '(.cost.total_lines_removed // 0)' 2>/dev/null)
     duration_ms=$(echo "$stdin_data" | jq -r '(.cost.total_duration_ms // 0)' 2>/dev/null)
     ctx_used=""
-    cache_pct="0"
     : "${current_dir:=unknown}"
     : "${model_name:=Unknown}"
-    : "${cost:=0}"
-    : "${lines_added:=0}"
-    : "${lines_removed:=0}"
     : "${duration_ms:=0}"
 fi
 
@@ -67,9 +49,8 @@ fi
 
 # Build repo path display (folder name only for brevity)
 if [ -n "$git_root" ]; then
-    repo_name=$(basename "$git_root")
     if [ "$current_dir" = "$git_root" ]; then
-        folder_name="$repo_name"
+        folder_name=$(basename "$git_root")
     else
         folder_name=$(basename "$current_dir")
     fi
@@ -82,25 +63,24 @@ progress_bar=""
 bar_width=12
 
 if [ -n "$ctx_used" ] && [ "$ctx_used" != "null" ]; then
+    # Clamp to 100 to prevent bar overflow
+    [ "$ctx_used" -gt 100 ] && ctx_used=100
+
     filled=$((ctx_used * bar_width / 100))
     empty=$((bar_width - filled))
 
     if [ "$ctx_used" -lt 50 ]; then
-        bar_color='\033[32m'  # Green (0-49%)
+        bar_color='\033[32m'
     elif [ "$ctx_used" -lt 80 ]; then
-        bar_color='\033[33m'  # Yellow (50-79%)
+        bar_color='\033[33m'
     else
-        bar_color='\033[31m'  # Red (80-100%)
+        bar_color='\033[31m'
     fi
 
     progress_bar="${bar_color}"
-    for ((i=0; i<filled; i++)); do
-        progress_bar="${progress_bar}█"
-    done
+    for ((i=0; i<filled; i++)); do progress_bar="${progress_bar}█"; done
     progress_bar="${progress_bar}\033[2m"
-    for ((i=0; i<empty; i++)); do
-        progress_bar="${progress_bar}⣿"
-    done
+    for ((i=0; i<empty; i++)); do progress_bar="${progress_bar}⣿"; done
     progress_bar="${progress_bar}\033[0m"
 
     ctx_pct="${ctx_used}%"
@@ -108,8 +88,121 @@ else
     ctx_pct=""
 fi
 
+# === API Usage Limits (5h / 7d) — cached, non-blocking ===
+CACHE_FILE="/tmp/claude_statusline_usage.json"
+CACHE_TTL=300  # 5 minutes
+
+# Detect GNU vs BSD date once at startup
+if date --version >/dev/null 2>&1; then
+    _DATE_GNU=1
+else
+    _DATE_GNU=0
+fi
+
+# Strip fractional seconds and timezone from ISO 8601 for BSD date parsing.
+# Handles: +HH:MM, -HH:MM, Z suffixes.
+_iso_strip_tz() {
+    echo "$1" | sed 's/\.[0-9]*//' | sed 's/[+-][0-9][0-9]:[0-9][0-9]$//' | sed 's/Z$//'
+}
+
+_iso_to_epoch() {
+    local iso="$1"
+    if [ "$_DATE_GNU" = "1" ]; then
+        date -d "$iso" +%s 2>/dev/null
+    else
+        # TZ=UTC ensures stripped datetime is interpreted as UTC, not local time
+        TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$(_iso_strip_tz "$iso")" +%s 2>/dev/null
+    fi
+}
+
+_fetch_usage_bg() {
+    local lock_file="${CACHE_FILE}.lock"
+    # mkdir is atomic — only one process succeeds
+    mkdir "$lock_file" 2>/dev/null || return
+    trap 'rm -rf "$lock_file"' EXIT
+    local token
+    token=$(jq -r '.claudeAiOauth.accessToken' ~/.claude/.credentials.json 2>/dev/null)
+    if [ -n "$token" ] && [ "$token" != "null" ]; then
+        local result
+        result=$(curl -s --max-time 5 \
+            -H "Authorization: Bearer $token" \
+            -H "anthropic-beta: oauth-2025-04-20" \
+            https://api.anthropic.com/api/oauth/usage 2>/dev/null)
+        if echo "$result" | jq -e '.five_hour' >/dev/null 2>&1; then
+            # umask 077: file is created 600 from the start, no world-readable window
+            (umask 077; echo "{\"ts\":$(date +%s),\"data\":$result}" > "$CACHE_FILE")
+        fi
+    fi
+    rm -rf "$lock_file"
+}
+
+# Format ISO reset time → local, compact (cross-platform: Linux & macOS)
+#   within 24h → "16:00"
+#   further    → "3/20"
+_format_reset() {
+    local iso="$1"
+    [ -z "$iso" ] && return
+    local now reset_epoch diff
+    now=$(date +%s)
+    reset_epoch=$(_iso_to_epoch "$iso") || return
+    [ -z "$reset_epoch" ] && return
+    diff=$((reset_epoch - now))
+    if [ "$diff" -le 86400 ]; then
+        # Within 24 hours: time only — display via epoch (auto local time on both platforms)
+        if [ "$_DATE_GNU" = "1" ]; then
+            date -d "@$reset_epoch" '+%H:%M' 2>/dev/null
+        else
+            date -j -r "$reset_epoch" '+%H:%M' 2>/dev/null
+        fi
+    else
+        # Further away: date only
+        if [ "$_DATE_GNU" = "1" ]; then
+            date -d "@$reset_epoch" '+%-m/%-d' 2>/dev/null
+        else
+            date -j -r "$reset_epoch" '+%-m/%-d' 2>/dev/null
+        fi
+    fi
+}
+
+# Usage color: green / yellow / red
+_usage_color() {
+    local pct="$1"
+    if   [ "$pct" -lt 50 ]; then printf '\033[32m'
+    elif [ "$pct" -lt 80 ]; then printf '\033[33m'
+    else                          printf '\033[31m'
+    fi
+}
+
+usage_json=""
+if [ -f "$CACHE_FILE" ]; then
+    cached_ts=$(jq -r '.ts // 0' "$CACHE_FILE" 2>/dev/null)
+    now=$(date +%s)
+    age=$((now - ${cached_ts:-0}))
+    usage_json=$(jq -r '.data' "$CACHE_FILE" 2>/dev/null)
+    if [ "$age" -ge "$CACHE_TTL" ] && [ ! -d "${CACHE_FILE}.lock" ]; then
+        (_fetch_usage_bg) &>/dev/null &
+        disown
+    fi
+else
+    (_fetch_usage_bg) &>/dev/null &
+    disown
+fi
+
+# Separator
+SEP='\033[2m│\033[0m'
+
+# Short model name
+short_model=$(echo "$model_name" | sed -E 's/Claude [0-9.]+ //; s/^Claude //')
+
+# LINE 1: [Model] 📁 folder │ 🌿 branch
+line1=$(printf '\033[37m[%s]\033[0m' "$short_model")
+line1="$line1 $(printf '\033[94m📁 %s\033[0m' "$folder_name")"
+if [ -n "$git_branch" ]; then
+    line1="$line1 $(printf '%b \033[96m🌿 %s\033[0m' "$SEP" "$git_branch")"
+fi
+
 # Session time (human-readable)
-if [ "$duration_ms" -gt 0 ] 2>/dev/null; then
+if [ "${duration_ms:-0}" -gt 0 ] 2>/dev/null; then
     total_sec=$((duration_ms / 1000))
     hours=$((total_sec / 3600))
     minutes=$(((total_sec % 3600) / 60))
@@ -117,7 +210,7 @@ if [ "$duration_ms" -gt 0 ] 2>/dev/null; then
     if [ "$hours" -gt 0 ]; then
         session_time="${hours}h ${minutes}m"
     elif [ "$minutes" -gt 0 ]; then
-        session_time="${minutes}m ${seconds}s"
+        session_time="${minutes}m"
     else
         session_time="${seconds}s"
     fi
@@ -125,20 +218,7 @@ else
     session_time=""
 fi
 
-# Separator
-SEP='\033[2m│\033[0m'
-
-# Get short model name (e.g., "Opus" instead of "Claude 3.5 Opus")
-short_model=$(echo "$model_name" | sed -E 's/Claude [0-9.]+ //; s/^Claude //')
-
-# LINE 1: [Model] folder | branch
-line1=$(printf '\033[37m[%s]\033[0m' "$short_model")
-line1="$line1 $(printf '\033[94m📁 %s\033[0m' "$folder_name")"
-if [ -n "$git_branch" ]; then
-    line1="$line1 $(printf '%b \033[96m🌿 %s\033[0m' "$SEP" "$git_branch")"
-fi
-
-# LINE 2: Progress bar | Context % | cost | duration
+# LINE 2: bar % │ ⌚ time │ 5h XX% → HH:MM │ 7d XX% → M/D
 line2=""
 if [ -n "$progress_bar" ]; then
     line2=$(printf '%b' "$progress_bar")
@@ -150,16 +230,34 @@ if [ -n "$ctx_pct" ]; then
         line2=$(printf '\033[37m%s\033[0m' "$ctx_pct")
     fi
 fi
-if [ -n "$line2" ]; then
-    line2="$line2 $(printf '%b \033[33m$%s\033[0m' "$SEP" "$cost")"
-else
-    line2=$(printf '\033[33m$%s\033[0m' "$cost")
-fi
 if [ -n "$session_time" ]; then
-    line2="$line2 $(printf '%b \033[36m⏱ %s\033[0m' "$SEP" "$session_time")"
+    line2="$line2 $(printf '%b \033[36m⌚ %s\033[0m' "$SEP" "$session_time")"
 fi
-if [ "$cache_pct" -gt 0 ] 2>/dev/null; then
-    line2="$line2 $(printf ' \033[2m↻%s%%\033[0m' "$cache_pct")"
+
+# Append 5h / 7d usage if available
+if [ -n "$usage_json" ] && [ "$usage_json" != "null" ]; then
+    IFS=$'\t' read -r fh_pct fh_reset sd_pct sd_reset < <(
+        echo "$usage_json" | jq -r '[
+            (.five_hour.utilization  // 0 | floor),
+            (.five_hour.resets_at   // ""),
+            (.seven_day.utilization  // 0 | floor),
+            (.seven_day.resets_at   // "")
+        ] | @tsv'
+    )
+
+    fh_time=$(_format_reset "$fh_reset")
+    sd_time=$(_format_reset "$sd_reset")
+    fh_color=$(_usage_color "$fh_pct")
+    sd_color=$(_usage_color "$sd_pct")
+
+    fh_str=$(printf "${fh_color}5h %s%%\033[0m \033[37m→ %s\033[0m" "$fh_pct" "$fh_time")
+    sd_str=$(printf "${sd_color}7d %s%%\033[0m \033[37m→ %s\033[0m" "$sd_pct" "$sd_time")
+
+    if [ -n "$line2" ]; then
+        line2="$line2 $(printf '%b %b %b %b' "$SEP" "$fh_str" "$SEP" "$sd_str")"
+    else
+        line2=$(printf '%b %b %b' "$fh_str" "$SEP" "$sd_str")
+    fi
 fi
 
 printf '%b\n\n%b' "$line1" "$line2"
