@@ -20,7 +20,7 @@ OS=$(detect_os)
 echo "Detected OS: $OS"
 
 # Create ~/.claude directories
-mkdir -p "$CLAUDE_DIR/hooks" "$CLAUDE_DIR/agents" "$CLAUDE_DIR/skills/fix-issue" "$CLAUDE_DIR/skills/review-pr"
+mkdir -p "$CLAUDE_DIR/hooks" "$CLAUDE_DIR/agents" "$CLAUDE_DIR/skills/fix-issue" "$CLAUDE_DIR/skills/review-pr" "$CLAUDE_DIR/skills/skill-creator/references"
 
 # Create directories required by sandbox (must exist to be mounted/blocked)
 # bwrap cannot mount tmpfs on symlinks, so replace symlink with a real directory
@@ -35,8 +35,10 @@ ln -sf "$DOTFILES_DIR/claude/CLAUDE.md"                        "$CLAUDE_DIR/CLAU
 ln -sf "$DOTFILES_DIR/claude/keybindings.json"                 "$CLAUDE_DIR/keybindings.json"
 ln -sf "$DOTFILES_DIR/claude/agents/researcher.md"             "$CLAUDE_DIR/agents/researcher.md"
 ln -sf "$DOTFILES_DIR/claude/agents/reviewer.md"               "$CLAUDE_DIR/agents/reviewer.md"
-ln -sf "$DOTFILES_DIR/claude/skills/fix-issue/SKILL.md"        "$CLAUDE_DIR/skills/fix-issue/SKILL.md"
-ln -sf "$DOTFILES_DIR/claude/skills/review-pr/SKILL.md"        "$CLAUDE_DIR/skills/review-pr/SKILL.md"
+ln -sf "$DOTFILES_DIR/claude/skills/fix-issue/SKILL.md"                        "$CLAUDE_DIR/skills/fix-issue/SKILL.md"
+ln -sf "$DOTFILES_DIR/claude/skills/review-pr/SKILL.md"                        "$CLAUDE_DIR/skills/review-pr/SKILL.md"
+ln -sf "$DOTFILES_DIR/claude/skills/skill-creator/SKILL.md"                    "$CLAUDE_DIR/skills/skill-creator/SKILL.md"
+ln -sf "$DOTFILES_DIR/claude/skills/skill-creator/references/guide.md"         "$CLAUDE_DIR/skills/skill-creator/references/guide.md"
 
 # Platform-specific setup
 case "$OS" in

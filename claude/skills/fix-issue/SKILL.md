@@ -9,7 +9,7 @@ Fix the GitHub issue: $ARGUMENTS
 Follow these steps exactly:
 
 ## 1. Understand the Issue
-- Run `gh issue view $ARGUMENTS` to read the full issue
+- Run `gh issue view "$ARGUMENTS"` to read the full issue
 - Identify the problem, expected behavior, and any reproduction steps
 
 ## 2. Investigate the Codebase

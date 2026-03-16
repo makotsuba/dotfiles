@@ -9,8 +9,8 @@ Review the pull request: $ARGUMENTS
 Follow these steps:
 
 ## 1. Get PR Details
-- Run `gh pr view $ARGUMENTS` to read the title, description, and linked issue
-- Run `gh pr diff $ARGUMENTS` to see all changes
+- Run `gh pr view "$ARGUMENTS"` to read the title, description, and linked issue
+- Run `gh pr diff "$ARGUMENTS"` to see all changes
 
 ## 2. Delegate to Reviewer Subagent
 - Use the reviewer subagent to analyze the diff
