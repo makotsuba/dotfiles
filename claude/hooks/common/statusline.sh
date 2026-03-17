@@ -12,6 +12,8 @@
 stdin_data=$(cat)
 
 # Single jq call - extract all values at once
+# @tsv with IFS=$'\t' is safe here: all fields always produce non-empty output
+# (string fallbacks, numeric 0, or "null" via try/catch), so no field collapsing occurs.
 IFS=$'\t' read -r current_dir model_name duration_ms ctx_used < <(
     echo "$stdin_data" | jq -r '[
         .workspace.current_dir // "unknown",
@@ -48,12 +50,8 @@ if cd "$current_dir" 2>/dev/null; then
 fi
 
 # Build repo path display (folder name only for brevity)
-if [[ -n "$git_root" ]]; then
-    if [[ "$current_dir" == "$git_root" ]]; then
-        folder_name=$(basename "$git_root")
-    else
-        folder_name=$(basename "$current_dir")
-    fi
+if [[ -n "$git_root" ]] && [[ "$current_dir" == "$git_root" ]]; then
+    folder_name=$(basename "$git_root")
 else
     folder_name=$(basename "$current_dir")
 fi
@@ -102,7 +100,7 @@ fi
 # Strip fractional seconds and timezone from ISO 8601 for BSD date parsing.
 # Handles: +HH:MM, -HH:MM, Z suffixes.
 _iso_strip_tz() {
-    echo "$1" | sed 's/\.[0-9]*//' | sed 's/[+-][0-9][0-9]:[0-9][0-9]$//' | sed 's/Z$//'
+    echo "$1" | sed -E 's/(\.[0-9]*)?(Z|[-+][0-9]{2}:[0-9]{2})?$//'
 }
 
 _iso_to_epoch() {
@@ -128,6 +126,8 @@ _fetch_usage_bg() {
             | jq -r '.claudeAiOauth.accessToken' 2>/dev/null)
     fi
     if [[ -n "$token" ]] && [[ "$token" != "null" ]]; then
+        # Sanity check: reject if token contains newlines or curl config metacharacters
+        [[ "$token" =~ ^[A-Za-z0-9._/+=~-]+$ ]] || return
         local result
         # Pass token via stdin (--config -) to avoid exposure in process list (ps aux)
         result=$(printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" \
@@ -151,6 +151,7 @@ _format_reset() {
     reset_epoch=$(_iso_to_epoch "$iso") || return
     [[ -z "$reset_epoch" ]] && return
     diff=$((reset_epoch - now))
+    [[ "$diff" -lt 0 ]] && return  # already elapsed — don't display stale time
     if [ "$diff" -le 86400 ]; then
         # Within 24 hours: time only — display via epoch (auto local time on both platforms)
         if [[ "$_DATE_GNU" == "1" ]]; then
@@ -240,13 +241,15 @@ fi
 
 # Append 5h / 7d usage if available
 if [[ -n "$usage_json" ]] && [[ "$usage_json" != "null" ]]; then
-    IFS=$'\t' read -r fh_pct fh_reset sd_pct sd_reset < <(
+    # Use \u0001 (SOH) as delimiter — tab is IFS whitespace and collapses consecutive
+    # empty fields, causing field misalignment when fh_reset or sd_reset is absent.
+    IFS=$'\001' read -r fh_pct fh_reset sd_pct sd_reset < <(
         echo "$usage_json" | jq -r '[
-            (.five_hour.utilization  // 0 | floor),
+            (.five_hour.utilization  // 0 | floor | tostring),
             (.five_hour.resets_at   // ""),
-            (.seven_day.utilization  // 0 | floor),
+            (.seven_day.utilization  // 0 | floor | tostring),
             (.seven_day.resets_at   // "")
-        ] | @tsv'
+        ] | join("\u0001")'
     )
 
     fh_time=$(_format_reset "$fh_reset")
@@ -254,8 +257,10 @@ if [[ -n "$usage_json" ]] && [[ "$usage_json" != "null" ]]; then
     fh_color=$(_usage_color "$fh_pct")
     sd_color=$(_usage_color "$sd_pct")
 
-    fh_str=$(printf "${fh_color}5h %s%%\033[0m \033[37m→ %s\033[0m" "$fh_pct" "$fh_time")
-    sd_str=$(printf "${sd_color}7d %s%%\033[0m \033[37m→ %s\033[0m" "$sd_pct" "$sd_time")
+    fh_str=$(printf "${fh_color}5h %s%%\033[0m" "$fh_pct")
+    [[ -n "$fh_time" ]] && fh_str="$fh_str $(printf '\033[37m→ %s\033[0m' "$fh_time")"
+    sd_str=$(printf "${sd_color}7d %s%%\033[0m" "$sd_pct")
+    [[ -n "$sd_time" ]] && sd_str="$sd_str $(printf '\033[37m→ %s\033[0m' "$sd_time")"
 
     if [[ -n "$line2" ]]; then
         line2="$line2 $(printf '%b %b %b %b' "$SEP" "$fh_str" "$SEP" "$sd_str")"
@@ -264,4 +269,8 @@ if [[ -n "$usage_json" ]] && [[ "$usage_json" != "null" ]]; then
     fi
 fi
 
-printf '%b\n\n%b' "$line1" "$line2"
+if [[ -n "$line2" ]]; then
+    printf '%b\n\n%b' "$line1" "$line2"
+else
+    printf '%b' "$line1"
+fi

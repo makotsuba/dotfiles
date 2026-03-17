@@ -33,7 +33,7 @@ description: What + When      # Under 1024 chars, no XML tags
 
 ```yaml
 license: MIT
-allowed-tools: "Bash(python:*) Bash(npm:*) WebFetch"  # Space-separated string (per official guide, Jan 2026)
+allowed-tools: "Bash(python:*) Bash(npm:*) WebFetch"  # Space-separated string (per official guide)
 compatibility: "Requires Node.js 18+"  # 1-500 characters
 metadata:
   author: Company Name
