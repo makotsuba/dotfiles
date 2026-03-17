@@ -89,7 +89,7 @@ else
 fi
 
 # === API Usage Limits (5h / 7d) — cached, non-blocking ===
-CACHE_FILE="/tmp/claude_statusline_usage.json"
+CACHE_FILE="${TMPDIR:-/tmp}/claude_statusline_usage_${UID}.json"
 CACHE_TTL=300  # 5 minutes
 
 # Detect GNU vs BSD date once at startup
@@ -122,12 +122,16 @@ _fetch_usage_bg() {
     trap 'rm -rf "$lock_file"' EXIT
     local token
     token=$(jq -r '.claudeAiOauth.accessToken' ~/.claude/.credentials.json 2>/dev/null)
-    if [ -n "$token" ] && [ "$token" != "null" ]; then
+    # macOS Keychain fallback (credentials.json not created on Mac)
+    if [[ "$OSTYPE" == darwin* ]] && { [[ -z "$token" ]] || [[ "$token" == "null" ]]; }; then
+        token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
+            | jq -r '.claudeAiOauth.accessToken' 2>/dev/null)
+    fi
+    if [[ -n "$token" ]] && [[ "$token" != "null" ]]; then
         local result
-        result=$(curl -s --max-time 5 \
-            -H "Authorization: Bearer $token" \
-            -H "anthropic-beta: oauth-2025-04-20" \
-            https://api.anthropic.com/api/oauth/usage 2>/dev/null)
+        # Pass token via stdin (--config -) to avoid exposure in process list (ps aux)
+        result=$(printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" \
+            | curl -s --max-time 5 --config - "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
         if echo "$result" | jq -e '.five_hour' >/dev/null 2>&1; then
             # umask 077: file is created 600 from the start, no world-readable window
             (umask 077; echo "{\"ts\":$(date +%s),\"data\":$result}" > "$CACHE_FILE")
