@@ -31,7 +31,7 @@ IFS=$'\t' read -r current_dir model_name duration_ms ctx_used < <(
 )
 
 # Bash-level fallback: if jq crashed entirely
-if [ -z "$current_dir" ] && [ -z "$model_name" ]; then
+if [[ -z "$current_dir" ]] && [[ -z "$model_name" ]]; then
     current_dir=$(echo "$stdin_data" | jq -r '.workspace.current_dir // .cwd // "unknown"' 2>/dev/null)
     model_name=$(echo "$stdin_data" | jq -r '.model.display_name // "Unknown"' 2>/dev/null)
     duration_ms=$(echo "$stdin_data" | jq -r '(.cost.total_duration_ms // 0)' 2>/dev/null)
@@ -48,8 +48,8 @@ if cd "$current_dir" 2>/dev/null; then
 fi
 
 # Build repo path display (folder name only for brevity)
-if [ -n "$git_root" ]; then
-    if [ "$current_dir" = "$git_root" ]; then
+if [[ -n "$git_root" ]]; then
+    if [[ "$current_dir" == "$git_root" ]]; then
         folder_name=$(basename "$git_root")
     else
         folder_name=$(basename "$current_dir")
@@ -62,7 +62,7 @@ fi
 progress_bar=""
 bar_width=12
 
-if [ -n "$ctx_used" ] && [ "$ctx_used" != "null" ]; then
+if [[ -n "$ctx_used" ]] && [[ "$ctx_used" != "null" ]]; then
     # Clamp to 100 to prevent bar overflow
     [ "$ctx_used" -gt 100 ] && ctx_used=100
 
@@ -107,7 +107,7 @@ _iso_strip_tz() {
 
 _iso_to_epoch() {
     local iso="$1"
-    if [ "$_DATE_GNU" = "1" ]; then
+    if [[ "$_DATE_GNU" == "1" ]]; then
         date -d "$iso" +%s 2>/dev/null
     else
         # TZ=UTC ensures stripped datetime is interpreted as UTC, not local time
@@ -145,22 +145,22 @@ _fetch_usage_bg() {
 #   further    → "3/20"
 _format_reset() {
     local iso="$1"
-    [ -z "$iso" ] && return
+    [[ -z "$iso" ]] && return
     local now reset_epoch diff
     now=$(date +%s)
     reset_epoch=$(_iso_to_epoch "$iso") || return
-    [ -z "$reset_epoch" ] && return
+    [[ -z "$reset_epoch" ]] && return
     diff=$((reset_epoch - now))
     if [ "$diff" -le 86400 ]; then
         # Within 24 hours: time only — display via epoch (auto local time on both platforms)
-        if [ "$_DATE_GNU" = "1" ]; then
+        if [[ "$_DATE_GNU" == "1" ]]; then
             date -d "@$reset_epoch" '+%H:%M' 2>/dev/null
         else
             date -j -r "$reset_epoch" '+%H:%M' 2>/dev/null
         fi
     else
         # Further away: date only
-        if [ "$_DATE_GNU" = "1" ]; then
+        if [[ "$_DATE_GNU" == "1" ]]; then
             date -d "@$reset_epoch" '+%-m/%-d' 2>/dev/null
         else
             date -j -r "$reset_epoch" '+%-m/%-d' 2>/dev/null
@@ -178,12 +178,12 @@ _usage_color() {
 }
 
 usage_json=""
-if [ -f "$CACHE_FILE" ]; then
+if [[ -f "$CACHE_FILE" ]]; then
     cached_ts=$(jq -r '.ts // 0' "$CACHE_FILE" 2>/dev/null)
     now=$(date +%s)
     age=$((now - ${cached_ts:-0}))
     usage_json=$(jq -r '.data' "$CACHE_FILE" 2>/dev/null)
-    if [ "$age" -ge "$CACHE_TTL" ] && [ ! -d "${CACHE_FILE}.lock" ]; then
+    if [ "$age" -ge "$CACHE_TTL" ] && [[ ! -d "${CACHE_FILE}.lock" ]]; then
         (_fetch_usage_bg) &>/dev/null &
         disown
     fi
@@ -201,7 +201,7 @@ short_model=$(echo "$model_name" | sed -E 's/Claude [0-9.]+ //; s/^Claude //')
 # LINE 1: [Model] 📁 folder │ 🌿 branch
 line1=$(printf '\033[37m[%s]\033[0m' "$short_model")
 line1="$line1 $(printf '\033[94m📁 %s\033[0m' "$folder_name")"
-if [ -n "$git_branch" ]; then
+if [[ -n "$git_branch" ]]; then
     line1="$line1 $(printf '%b \033[96m🌿 %s\033[0m' "$SEP" "$git_branch")"
 fi
 
@@ -224,22 +224,22 @@ fi
 
 # LINE 2: bar % │ ⌚ time │ 5h XX% → HH:MM │ 7d XX% → M/D
 line2=""
-if [ -n "$progress_bar" ]; then
+if [[ -n "$progress_bar" ]]; then
     line2=$(printf '%b' "$progress_bar")
 fi
-if [ -n "$ctx_pct" ]; then
-    if [ -n "$line2" ]; then
+if [[ -n "$ctx_pct" ]]; then
+    if [[ -n "$line2" ]]; then
         line2="$line2 $(printf '\033[37m%s\033[0m' "$ctx_pct")"
     else
         line2=$(printf '\033[37m%s\033[0m' "$ctx_pct")
     fi
 fi
-if [ -n "$session_time" ]; then
+if [[ -n "$session_time" ]]; then
     line2="$line2 $(printf '%b \033[36m⌚ %s\033[0m' "$SEP" "$session_time")"
 fi
 
 # Append 5h / 7d usage if available
-if [ -n "$usage_json" ] && [ "$usage_json" != "null" ]; then
+if [[ -n "$usage_json" ]] && [[ "$usage_json" != "null" ]]; then
     IFS=$'\t' read -r fh_pct fh_reset sd_pct sd_reset < <(
         echo "$usage_json" | jq -r '[
             (.five_hour.utilization  // 0 | floor),
@@ -257,7 +257,7 @@ if [ -n "$usage_json" ] && [ "$usage_json" != "null" ]; then
     fh_str=$(printf "${fh_color}5h %s%%\033[0m \033[37m→ %s\033[0m" "$fh_pct" "$fh_time")
     sd_str=$(printf "${sd_color}7d %s%%\033[0m \033[37m→ %s\033[0m" "$sd_pct" "$sd_time")
 
-    if [ -n "$line2" ]; then
+    if [[ -n "$line2" ]]; then
         line2="$line2 $(printf '%b %b %b %b' "$SEP" "$fh_str" "$SEP" "$sd_str")"
     else
         line2=$(printf '%b %b %b' "$fh_str" "$SEP" "$sd_str")
