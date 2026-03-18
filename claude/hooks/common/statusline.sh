@@ -241,15 +241,16 @@ fi
 
 # Append 5h / 7d usage if available
 if [[ -n "$usage_json" ]] && [[ "$usage_json" != "null" ]]; then
-    # Use \u0001 (SOH) as delimiter — tab is IFS whitespace and collapses consecutive
-    # empty fields, causing field misalignment when fh_reset or sd_reset is absent.
-    IFS=$'\001' read -r fh_pct fh_reset sd_pct sd_reset < <(
+    # Use "-" fallback for resets_at: prevents consecutive empty tabs from collapsing
+    # fields (bash 3.2 IFS whitespace behavior). "-" fails _format_reset silently → "".
+    # WARNING: do not change "-" to "" — empty fallback reintroduces the tab-collapse bug.
+    IFS=$'\t' read -r fh_pct fh_reset sd_pct sd_reset < <(
         echo "$usage_json" | jq -r '[
-            (.five_hour.utilization  // 0 | floor | tostring),
-            (.five_hour.resets_at   // ""),
-            (.seven_day.utilization  // 0 | floor | tostring),
-            (.seven_day.resets_at   // "")
-        ] | join("\u0001")'
+            (.five_hour.utilization  // 0 | floor),
+            (.five_hour.resets_at   // "-"),
+            (.seven_day.utilization  // 0 | floor),
+            (.seven_day.resets_at   // "-")
+        ] | @tsv'
     )
 
     fh_time=$(_format_reset "$fh_reset")
