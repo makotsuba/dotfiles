@@ -179,6 +179,10 @@ _usage_color() {
 }
 
 usage_json=""
+# Remove stale lock left by SIGKILL (trap does not fire on forced termination).
+# Runs unconditionally so the else-branch (no cache file yet) is also covered.
+find "${CACHE_FILE}.lock" -maxdepth 0 -type d -mmin +1 \
+    -exec rm -rf {} \; 2>/dev/null
 if [[ -f "$CACHE_FILE" ]]; then
     cached_ts=$(jq -r '.ts // 0' "$CACHE_FILE" 2>/dev/null)
     now=$(date +%s)
