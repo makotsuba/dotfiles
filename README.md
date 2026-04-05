@@ -1,6 +1,6 @@
 # dotfiles
 
-Personal dotfiles – configurations for Claude Code and other tools.
+Personal dotfiles for Claude Code, Codex, and related tooling.
 
 ## Prerequisites
 
@@ -55,34 +55,74 @@ bash install.sh
 git pull && bash install.sh
 ```
 
-Claude Code を再起動して設定を反映させてください。
+`install.sh` は Claude Code と Codex の両方をセットアップします。反映のため、利用中のクライアントを再起動してください。
+
+## Installed Paths
+
+### Claude Code
+
+- `~/.claude/CLAUDE.md`
+- `~/.claude/agents/`
+- `~/.claude/skills/`
+- `~/.claude/hooks/`
+- `~/.claude/settings.json`
+
+### Codex
+
+- `~/.codex/AGENTS.md`
+- `~/.codex/agents/`
+- `~/.codex/hooks/`
+- `~/.codex/hooks.json`
+- `~/.codex/config.toml`
+- `~/.agents/skills/`
 
 ## Security
 
-`claude/hooks/common/` には全プラットフォーム共通のセキュリティ hook が含まれます。
+Claude Code と Codex の両方で、共通の安全ガードを有効にします。
 
-| Hook | 対象ツール | 内容 |
+| Tool | Hook | 対象 | 内容 |
 | --- | --- | --- |
-| `block-dotenv.sh` | Read / Edit / Write / MultiEdit / NotebookEdit | `.env`・`.env.?*`・`.envrc` へのアクセスをブロック |
-| `block-rm-rf.sh` | Bash | `rm -rf` / `rm -fr` の実行をブロック |
+| Claude Code | `block-dotenv.sh` | Read / Edit / Write / MultiEdit / NotebookEdit | `.env`・`.env.?*`・`.envrc` へのアクセスをブロック |
+| Claude Code | `block-rm-rf.sh` | Bash | `rm -rf` / `rm -fr` の実行をブロック |
+| Codex | `block-dotenv-bash.sh` | Bash | shell 経由の `.env`・`.env.?*`・`.envrc` アクセスをブロック |
+| Codex | `block-rm-rf.sh` | Bash | `rm -rf` / `rm -fr` の実行をブロック |
 
-> **Note:** Claude Code の glob パターン（`deny` ルール）は `.env.*` を正しく展開できないため、hook で代替しています。
+> **Note:** Codex の `PreToolUse` hook は現在 Bash に対してのみ使用しています。そのため `.env` 保護は Claude Code より狭く、native file tool 相当の経路まではフックできません。運用上は `codex/AGENTS.md` の禁止ルールと併用してください。
+
+## Codex Notes
+
+- `researcher` と `reviewer` subagent は `codex/agents/researcher.toml` と `codex/agents/reviewer.toml` で定義しています。
+- skills は `codex/skills/` から `~/.agents/skills/` へ symlink されます。
+- `~/.codex/config.toml` は既存設定を保持したまま、足りないデフォルト値だけを追加します。更新前の内容は `~/.codex/config.toml.bak` に退避します。
+- 既存の `~/.codex/config.toml` を merge するには `python3` の `tomllib` が必要です。Python 3.11 未満を使う場合は `tomli` を追加してください。
+- 既存の `~/.codex/config.toml` に array of tables など未対応の構造がある場合、silent に書き換えず installer は明示エラーで停止します。
+- WSL / macOS ともに task 完了時の通知 hook を設定します。Claude Code にあった idle 通知は Codex には移植していません。
 
 ## Structure
 
 ```text
 dotfiles/
 ├── install.sh                      # Setup script (auto-detects OS)
-└── claude/
-    ├── CLAUDE.md                   # Global instructions for Claude Code
-    ├── keybindings.json            # Key bindings
-    ├── agents/                     # Custom agent definitions
-    ├── skills/                     # Custom skills
-    ├── hooks/
-    │   ├── common/                 # Shared across all platforms
-    │   ├── wsl/                    # WSL-specific (Windows notifications)
-    │   └── mac/                    # macOS-specific (osascript notifications)
-    └── settings/
-        ├── wsl.json                # WSL settings template
-        └── mac.json                # macOS settings template
+├── claude/
+│   ├── CLAUDE.md                   # Global instructions for Claude Code
+│   ├── keybindings.json            # Key bindings
+│   ├── agents/                     # Custom agent definitions
+│   ├── skills/                     # Custom skills
+│   ├── hooks/
+│   │   ├── common/                 # Shared across all platforms
+│   │   ├── wsl/                    # WSL-specific (Windows notifications)
+│   │   └── mac/                    # macOS-specific (osascript notifications)
+│   └── settings/
+│       ├── wsl.json                # WSL settings template
+│       └── mac.json                # macOS settings template
+├── codex/
+│   ├── AGENTS.md                   # Global instructions for Codex
+│   ├── agents/                     # Codex subagent definitions
+│   ├── hooks/                      # Codex hook scripts
+│   ├── skills/                     # Codex skills
+│   ├── config.toml.base            # Default Codex config values
+│   └── hooks.json.template         # Hook template expanded by install.sh
+└── tasks/
+    ├── todo.md                     # Working plan / review notes
+    └── lessons.md                  # Reusable lessons after corrections
 ```

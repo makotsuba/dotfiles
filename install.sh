@@ -107,6 +107,179 @@ CODEX_HOOKS_DIR="$CODEX_DIR/hooks"
 AGENTS_SKILLS_DIR="$HOME/.agents/skills"
 mkdir -p "$CODEX_HOOKS_DIR" "$CODEX_DIR/agents" "$AGENTS_SKILLS_DIR"
 
+merge_codex_config() {
+    python3 - <<PYEOF
+import json
+import os
+import shutil
+import sys
+from datetime import date, datetime, time
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
+
+config_path = os.path.join(os.path.expanduser("~"), ".codex", "config.toml")
+
+defaults = {
+    "approval_policy": "on-request",
+    "features": {
+        "codex_hooks": True,
+    },
+    "tui": {
+        "status_line": [
+            "model-with-reasoning",
+            "context-remaining",
+            "current-dir",
+            "git-branch",
+            "five-hour-limit",
+        ],
+        "notifications": ["approval-requested"],
+        "notification_method": "osc9",
+    },
+}
+
+def load_existing(path):
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = fh.read()
+    # Empty or comment-only config files should not break reinstall.
+    meaningful_lines = [
+        line for line in raw.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not meaningful_lines:
+        return {}
+    if tomllib is None:
+        raise RuntimeError(
+            "Codex config merge requires Python 3.11+ or the tomli package"
+        )
+    try:
+        return tomllib.loads(raw)
+    except tomllib.TOMLDecodeError:
+        raise
+
+def merge_defaults(target, source):
+    for key, value in source.items():
+        if key not in target:
+            target[key] = value
+            continue
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            merge_defaults(target[key], value)
+
+def validate_value(path, value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            validate_value(path + [str(key)], item)
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            if isinstance(item, (dict, list)):
+                dotted = ".".join(path) if path else "<root>"
+                raise RuntimeError(
+                    f"Unsupported TOML structure at {dotted}[{index}]"
+                )
+            validate_value(path + [str(index)], item)
+        return
+    if isinstance(value, (bool, str, int, float, date, datetime, time)):
+        return
+    raise RuntimeError(
+        f"Unsupported TOML value at {'.'.join(path) if path else '<root>'}: {value!r}"
+    )
+
+def format_key(key):
+    if key.replace("_", "").replace("-", "").isalnum():
+        return key
+    return json.dumps(key)
+
+def format_value(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(format_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        items = ", ".join(
+            f"{format_key(key)} = {format_value(item)}"
+            for key, item in value.items()
+        )
+        return "{ " + items + " }"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, (date, datetime, time)):
+        return value.isoformat()
+    raise TypeError(f"Unsupported TOML value: {value!r}")
+
+def emit_table(lines, path, table):
+    scalars = []
+    subtables = []
+    for key, value in table.items():
+        if isinstance(value, dict):
+            subtables.append((key, value))
+        else:
+            scalars.append((key, value))
+
+    wrote_header = False
+    if path and scalars:
+        header = ".".join(format_key(part) for part in path)
+        lines.append(f"[{header}]")
+        wrote_header = True
+    for key, value in scalars:
+        lines.append(f"{format_key(key)} = {format_value(value)}")
+    if wrote_header:
+        lines.append("")
+
+    for key, value in subtables:
+        emit_table(lines, path + [key], value)
+
+try:
+    existing = load_existing(config_path)
+    merged = existing.copy()
+    merge_defaults(merged, defaults)
+    validate_value([], merged)
+except RuntimeError as exc:
+    print(f"Error: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if os.path.exists(config_path):
+    shutil.copy2(config_path, config_path + ".bak")
+
+lines = []
+
+top_level_scalars = []
+top_level_tables = []
+for key, value in merged.items():
+    if isinstance(value, dict):
+        top_level_tables.append((key, value))
+    else:
+        top_level_scalars.append((key, value))
+
+for key, value in top_level_scalars:
+    lines.append(f"{format_key(key)} = {format_value(value)}")
+if top_level_scalars:
+    lines.append("")
+
+for key, value in top_level_tables:
+    emit_table(lines, [key], value)
+
+content = "\n".join(lines).rstrip() + "\n"
+with open(config_path, "w", encoding="utf-8") as fh:
+    fh.write(content)
+
+print("  config.toml updated (preserved existing settings, added missing defaults)")
+if os.path.exists(config_path + ".bak"):
+    print(f"  backup: {config_path}.bak")
+PYEOF
+}
+
 # Symlink AGENTS.md
 ln -sf "$DOTFILES_DIR/codex/AGENTS.md" "$CODEX_DIR/AGENTS.md"
 
@@ -160,29 +333,8 @@ case "$OS" in
             "$DOTFILES_DIR/codex/hooks.json.template" > "$TMP"
         mv "$TMP" "$CODEX_DIR/hooks.json"
 
-        # Merge config.toml: write base settings, preserve existing project trust lines
-        python3 - <<PYEOF
-import re, os
-
-config_path = os.path.join(os.path.expanduser("~"), ".codex", "config.toml")
-base_path   = os.path.join("$DOTFILES_DIR", "codex", "config.toml.base")
-
-existing = open(config_path).read() if os.path.exists(config_path) else ""
-
-# Extract [projects.*] blocks (trust_level lines)
-project_blocks = re.findall(
-    r'(\[projects\.[^\]]+\]\ntrust_level\s*=\s*"[^"]+"\n)',
-    existing
-)
-
-base = open(base_path).read()
-new_config = base.rstrip("\n") + "\n"
-if project_blocks:
-    new_config += "\n" + "".join(project_blocks)
-
-open(config_path, "w").write(new_config)
-print(f"  config.toml updated (preserved {len(project_blocks)} project trust entries)")
-PYEOF
+        # Merge config.toml: preserve existing settings and add missing defaults
+        merge_codex_config
 
         echo "Codex WSL setup complete."
         ;;
@@ -201,26 +353,7 @@ PYEOF
             "$DOTFILES_DIR/codex/hooks.json.template" > "$TMP"
         mv "$TMP" "$CODEX_DIR/hooks.json"
 
-        python3 - <<PYEOF
-import re, os
-
-config_path = os.path.join(os.path.expanduser("~"), ".codex", "config.toml")
-base_path   = os.path.join("$DOTFILES_DIR", "codex", "config.toml.base")
-
-existing = open(config_path).read() if os.path.exists(config_path) else ""
-project_blocks = re.findall(
-    r'(\[projects\.[^\]]+\]\ntrust_level\s*=\s*"[^"]+"\n)',
-    existing
-)
-
-base = open(base_path).read()
-new_config = base.rstrip("\n") + "\n"
-if project_blocks:
-    new_config += "\n" + "".join(project_blocks)
-
-open(config_path, "w").write(new_config)
-print(f"  config.toml updated (preserved {len(project_blocks)} project trust entries)")
-PYEOF
+        merge_codex_config
 
         echo "Codex Mac setup complete."
         ;;

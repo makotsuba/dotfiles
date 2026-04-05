@@ -1,4 +1,5 @@
 # Claude Code - runtime data
+.codex
 claude/projects/
 claude/history.jsonl
 claude/cache/
