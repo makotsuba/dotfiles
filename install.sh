@@ -66,6 +66,7 @@ case "$OS" in
         for hook in "$DOTFILES_DIR/claude/hooks/wsl/"*.sh \
                     "$DOTFILES_DIR/claude/hooks/common/"*.sh; do
             ln -sf "$hook" "$HOOKS_DIR/$(basename "$hook")"
+            chmod +x "$hook"
         done
         shopt -u nullglob
         TMP=$(mktemp "$CLAUDE_DIR/settings.json.XXXXXX")
@@ -81,6 +82,7 @@ case "$OS" in
         for hook in "$DOTFILES_DIR/claude/hooks/mac/"*.sh \
                     "$DOTFILES_DIR/claude/hooks/common/"*.sh; do
             ln -sfh "$hook" "$HOOKS_DIR/$(basename "$hook")"
+            chmod +x "$hook"
         done
         shopt -u nullglob
         TMP=$(mktemp "$CLAUDE_DIR/settings.json.XXXXXX")
@@ -96,3 +98,135 @@ case "$OS" in
 esac
 
 echo "Done! Claude Code dotfiles installed to $CLAUDE_DIR"
+
+# ---------------------------------------------------------------------------
+# Codex setup
+# ---------------------------------------------------------------------------
+CODEX_DIR="$HOME/.codex"
+CODEX_HOOKS_DIR="$CODEX_DIR/hooks"
+AGENTS_SKILLS_DIR="$HOME/.agents/skills"
+mkdir -p "$CODEX_HOOKS_DIR" "$CODEX_DIR/agents" "$AGENTS_SKILLS_DIR"
+
+# Symlink AGENTS.md
+ln -sf "$DOTFILES_DIR/codex/AGENTS.md" "$CODEX_DIR/AGENTS.md"
+
+# Symlink subagents (TOML files)
+for agent in "$DOTFILES_DIR/codex/agents/"*.toml; do
+    ln -sf "$agent" "$CODEX_DIR/agents/$(basename "$agent")"
+done
+
+# Symlink skills to ~/.agents/skills/ (entire directory to include references/, scripts/, assets/)
+python3 - <<PYEOF
+import os, shutil
+
+dotfiles_dir = "$DOTFILES_DIR"
+agents_skills_dir = os.path.join(os.path.expanduser("~"), ".agents", "skills")
+os.makedirs(agents_skills_dir, exist_ok=True)
+
+skills_source = os.path.join(dotfiles_dir, "codex", "skills")
+for skill_name in sorted(os.listdir(skills_source)):
+    skill_dir = os.path.join(skills_source, skill_name)
+    if not os.path.isdir(skill_dir):
+        continue
+    target = os.path.join(agents_skills_dir, skill_name)
+    if os.path.islink(target):
+        os.unlink(target)
+    elif os.path.isdir(target):
+        shutil.rmtree(target)
+    os.symlink(skill_dir, target)
+    print(f"  skill: {skill_name}")
+PYEOF
+
+case "$OS" in
+    wsl)
+        # Symlink hook scripts:
+        #   - codex/hooks/wsl/: WSL-specific (notify-stop.sh)
+        #   - codex/hooks/common/: Codex-specific common hooks (block-dotenv-bash.sh)
+        #   - claude/hooks/common/block-rm-rf.sh: shared guard (same JSON format)
+        # NOTE: block-dotenv-bash.sh covers shell-based .env access (cat, vim, echo >, etc.)
+        #       Native file tool interception is unsupported (Codex PreToolUse: Bash only).
+        shopt -s nullglob
+        for hook in "$DOTFILES_DIR/codex/hooks/wsl/"*.sh \
+                    "$DOTFILES_DIR/codex/hooks/common/"*.sh \
+                    "$DOTFILES_DIR/claude/hooks/common/block-rm-rf.sh"; do
+            ln -sf "$hook" "$CODEX_HOOKS_DIR/$(basename "$hook")"
+            chmod +x "$hook"
+        done
+        shopt -u nullglob
+
+        # Generate hooks.json
+        TMP=$(mktemp)
+        sed "s|__HOOKS_DIR__|$CODEX_HOOKS_DIR|g" \
+            "$DOTFILES_DIR/codex/hooks.json.template" > "$TMP"
+        mv "$TMP" "$CODEX_DIR/hooks.json"
+
+        # Merge config.toml: write base settings, preserve existing project trust lines
+        python3 - <<PYEOF
+import re, os
+
+config_path = os.path.join(os.path.expanduser("~"), ".codex", "config.toml")
+base_path   = os.path.join("$DOTFILES_DIR", "codex", "config.toml.base")
+
+existing = open(config_path).read() if os.path.exists(config_path) else ""
+
+# Extract [projects.*] blocks (trust_level lines)
+project_blocks = re.findall(
+    r'(\[projects\.[^\]]+\]\ntrust_level\s*=\s*"[^"]+"\n)',
+    existing
+)
+
+base = open(base_path).read()
+new_config = base.rstrip("\n") + "\n"
+if project_blocks:
+    new_config += "\n" + "".join(project_blocks)
+
+open(config_path, "w").write(new_config)
+print(f"  config.toml updated (preserved {len(project_blocks)} project trust entries)")
+PYEOF
+
+        echo "Codex WSL setup complete."
+        ;;
+    mac)
+        shopt -s nullglob
+        for hook in "$DOTFILES_DIR/codex/hooks/mac/"*.sh \
+                    "$DOTFILES_DIR/codex/hooks/common/"*.sh \
+                    "$DOTFILES_DIR/claude/hooks/common/block-rm-rf.sh"; do
+            ln -sfh "$hook" "$CODEX_HOOKS_DIR/$(basename "$hook")"
+            chmod +x "$hook"
+        done
+        shopt -u nullglob
+
+        TMP=$(mktemp)
+        sed "s|__HOOKS_DIR__|$CODEX_HOOKS_DIR|g" \
+            "$DOTFILES_DIR/codex/hooks.json.template" > "$TMP"
+        mv "$TMP" "$CODEX_DIR/hooks.json"
+
+        python3 - <<PYEOF
+import re, os
+
+config_path = os.path.join(os.path.expanduser("~"), ".codex", "config.toml")
+base_path   = os.path.join("$DOTFILES_DIR", "codex", "config.toml.base")
+
+existing = open(config_path).read() if os.path.exists(config_path) else ""
+project_blocks = re.findall(
+    r'(\[projects\.[^\]]+\]\ntrust_level\s*=\s*"[^"]+"\n)',
+    existing
+)
+
+base = open(base_path).read()
+new_config = base.rstrip("\n") + "\n"
+if project_blocks:
+    new_config += "\n" + "".join(project_blocks)
+
+open(config_path, "w").write(new_config)
+print(f"  config.toml updated (preserved {len(project_blocks)} project trust entries)")
+PYEOF
+
+        echo "Codex Mac setup complete."
+        ;;
+    *)
+        echo "Unsupported OS for Codex: $OS"
+        ;;
+esac
+
+echo "Done! Codex dotfiles installed to $CODEX_DIR"

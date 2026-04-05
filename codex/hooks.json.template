@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOKS_DIR__/notify-stop.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOOKS_DIR__/block-rm-rf.sh"
+          },
+          {
+            "type": "command",
+            "command": "__HOOKS_DIR__/block-dotenv-bash.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,5 +1,9 @@
 #!/bin/bash
 # PreToolUse hook: block rm -rf as a second layer (deny list known bug workaround)
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
 input=$(cat)
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
 
