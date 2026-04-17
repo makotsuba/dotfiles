@@ -1,6 +1,7 @@
 # on-request: pause for approval only when Codex requests elevated permissions
 # suggest: pause before every shell command (closest to Claude Code's "ask" list)
 # Change to "suggest" if you want explicit confirmation for git commit/push
+sandbox_mode = "workspace-write"
 approval_policy = "on-request"
 
 [features]

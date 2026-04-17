@@ -126,6 +126,7 @@ except ModuleNotFoundError:
 config_path = os.path.join(os.path.expanduser("~"), ".codex", "config.toml")
 
 defaults = {
+    "sandbox_mode": "workspace-write",
     "approval_policy": "on-request",
     "features": {
         "codex_hooks": True,

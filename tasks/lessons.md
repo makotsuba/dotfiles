@@ -7,3 +7,5 @@
 - hook の発火主体を見分けたいときは、環境変数や親プロセスだけで決め打ちせず、`stdin` の event payload と transcript の `session_meta` を確認する。
 - Codex のように更新が速い CLI の設定 token は記憶で書かず、公式ドキュメントか手元 binary の実在値で裏取りしてから `config.toml.base` や installer defaults に反映する。
 - ドキュメントの install 対象一覧には installer が直接作成・更新するものだけを載せ、アプリ本体が生成する runtime data は別文脈で説明して責務を混ぜない。
+- dotfiles で再現したいランタイム前提が upstream の default に依存している場合は、意図が固まっているなら config に明示して drift を避ける。
+- merge 型 installer の README では「固定」「適用」といった表現が既存ユーザー設定を上書きする含みに読めないか確認し、未設定時にだけ入る default であることを明記する。
