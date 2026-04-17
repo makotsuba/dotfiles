@@ -5,9 +5,10 @@ approval_policy = "on-request"
 
 [features]
 codex_hooks = true
+memories = true
 
 [tui]
-status_line = ["model-with-reasoning", "context-remaining", "current-dir", "git-branch", "five-hour-limit"]
+status_line = ["model-with-reasoning", "context-used", "current-dir", "git-branch", "five-hour-limit", "weekly-limit"]
 # Notify when approval is needed (equivalent to Claude Code's Notification/permission_prompt)
 notifications = ["approval-requested"]
 # osc9: Windows Terminal picks up OSC 9 sequences and shows a notification (works on WSL)

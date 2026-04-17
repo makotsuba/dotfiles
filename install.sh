@@ -129,14 +129,16 @@ defaults = {
     "approval_policy": "on-request",
     "features": {
         "codex_hooks": True,
+        "memories": True,
     },
     "tui": {
         "status_line": [
             "model-with-reasoning",
-            "context-remaining",
+            "context-used",
             "current-dir",
             "git-branch",
             "five-hour-limit",
+            "weekly-limit",
         ],
         "notifications": ["approval-requested"],
         "notification_method": "osc9",
