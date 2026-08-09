@@ -129,7 +129,7 @@ defaults = {
     "sandbox_mode": "workspace-write",
     "approval_policy": "on-request",
     "features": {
-        "codex_hooks": True,
+        "hooks": True,
         "memories": True,
     },
     "tui": {
@@ -245,6 +245,11 @@ def emit_table(lines, path, table):
 
 try:
     existing = load_existing(config_path)
+    features = existing.get("features")
+    if isinstance(features, dict) and "codex_hooks" in features:
+        if "hooks" not in features:
+            features["hooks"] = features["codex_hooks"]
+        del features["codex_hooks"]
     merged = existing.copy()
     merge_defaults(merged, defaults)
     validate_value([], merged)
