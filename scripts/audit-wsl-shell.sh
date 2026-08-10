@@ -286,8 +286,11 @@ for package_manager in apt apt-get brew; do
     fi
 done
 
-section 'installer prerequisites'
-for dependency in bwrap socat npm; do
+section 'sandbox tool (Codex and Claude components)'
+command_availability bwrap
+
+section 'Claude component prerequisites'
+for dependency in socat npm; do
     if command -v "$dependency" >/dev/null 2>&1; then
         printf '%s: available\n' "$dependency"
     else

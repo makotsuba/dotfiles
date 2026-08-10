@@ -16,12 +16,16 @@ Personal dotfiles for Claude Code, Codex, and related tooling.
 
 #### Sandbox
 
-以下は必須の依存関係です。`install.sh` を実行する前にインストールしてください。
-
-> **Note:** 未インストールの場合、スクリプトはエラーで終了します。
+WSL で `codex` または `claude` component を適用するには、sandbox 用の `bubblewrap` が必要です。Codex は Linux / WSL2 の sandbox で system `bwrap` を優先し、bundled fallback も持ちますが、[OpenAI の sandbox documentation](https://learn.chatgpt.com/docs/sandboxing) に従って system package を使います。この installer は再現性のため、選択した component の事前検証で `bwrap` が未導入なら変更前に停止します。
 
 ```bash
-sudo apt install -y bubblewrap socat
+sudo apt install -y bubblewrap
+```
+
+`claude` component の WSL preflight では、`bubblewrap` に加えて次の依存関係を確認します。
+
+```bash
+sudo apt install -y socat
 npm install -g @anthropic-ai/sandbox-runtime
 ```
 
@@ -57,12 +61,12 @@ sh ~/dotfiles/scripts/audit-wsl-shell.sh --details
 
 #### fish / Starship の管理
 
-WSL の fish と主 Starship profile は、監査後に installer で管理します。事前に fish、Starship、Windows 側の 1Password / OpenSSH command が利用可能であることを確認してください。`op.exe`、`ssh.exe`、`ssh-add.exe` が見つからない場合、対応する abbreviation は作られず Linux 側の command を使います。
+WSL の fish と主 Starship profile は、監査後に shell component で管理します。事前に fish、Starship、Windows 側の 1Password / OpenSSH command が利用可能であることを確認してください。`op.exe`、`ssh.exe`、`ssh-add.exe` が見つからない場合、対応する abbreviation は作られず Linux 側の command を使います。
 
 ```bash
 command -v fish starship op.exe ssh.exe ssh-add.exe
 cd ~/dotfiles
-bash install.sh
+bash install.sh --components codex,shell
 ```
 
 installer は既存の通常ファイル・別先の symlink・dangling symlink を `~/.dotfiles-backups/fish-starship-*/` へ退避してから、次の3ファイルを管理します。実ディレクトリが置かれている場合は安全のため停止し、変更しません。
@@ -144,7 +148,7 @@ brew bundle install --no-upgrade --file ~/dotfiles/Brewfile
 bash install.sh
 ```
 
-WSL では、上記の fish / Starship 前提を満たした後に `cd ~/dotfiles` の後に `bash install.sh` を実行します。
+WSL では、適用する component の組み合わせを [Selective Install](#selective-install) から選んで実行します。
 
 ## Update
 
@@ -156,13 +160,47 @@ brew bundle install --no-upgrade --file ~/dotfiles/Brewfile
 bash install.sh
 ```
 
-WSL では、fish / Starship と Windows 側 command の確認後に次を実行します。
+WSL では、更新する component に応じて、fish / Starship と Windows 側 command の前提を確認してから installer を実行します。代表的な組み合わせは次のとおりです。
 
 ```bash
+# 全 component
 git pull && bash install.sh
+
+# Codex と shell
+git pull && bash install.sh --components codex,shell
 ```
 
-`install.sh` は Claude Code と Codex の両方をセットアップします。反映のため、利用中のクライアントを再起動してください。
+## Selective Install
+
+引数なしの `bash install.sh` は、後方互換のため `claude,codex,shell` をすべて適用します。明示する場合は `--components all` も同じ意味です。必要な component だけを適用するには、`--components` に comma 区切りで指定します。空値、重複、未知の component は変更前にエラーになります。
+
+```bash
+# codex,shell を適用する
+bash install.sh --components codex,shell
+
+# claude を適用する
+bash install.sh --components claude
+
+# 全 component を明示して適用する
+bash install.sh --components all
+```
+
+| Component | 対象 | WSL の追加条件・副作用 |
+| --- | --- | --- |
+| `claude` | `~/.claude/`、`~/.aws/`、Claude hooks / settings | `bwrap`、`socat`、`@anthropic-ai/sandbox-runtime` を確認し、`core.sshCommand = ssh.exe` を設定 |
+| `codex` | `~/.codex/`、`~/.agents/skills/`、Codex hooks / config merge | WSL では `bwrap`、全対応 OS では Python と既存 `config.toml` の構造を変更前に確認 |
+| `shell` | fish / Starship 設定 | fish と Starship を確認し、対象ファイルを backup 後に symlink 化 |
+
+選択した component ごとに、上表の preflight と管理対象を処理します。`codex,shell` は Codex の設定・skills・hooks と、WSL では 3 ファイル、macOS では 4 ファイルの shell target を処理します。shell target はすべて検証してから開始し、リンク作成中に失敗した場合は shell component 内で既に切り替えた target を backup から復元します。
+
+component の隔離 HOME integration test は、空の一時 directory を明示して実行します。test root は結果確認のため残ります。
+
+```bash
+TEST_ROOT=$(mktemp -d /tmp/dotfiles-install-test.XXXXXX)
+TEST_ROOT="$TEST_ROOT" bash scripts/test-install-components.sh
+```
+
+反映のため、利用中のクライアントを再起動してください。
 
 ## Installed Paths
 

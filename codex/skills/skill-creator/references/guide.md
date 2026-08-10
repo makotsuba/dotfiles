@@ -1,6 +1,6 @@
 # Skill Building Reference Guide
 
-Based on the open agent skills standard (https://agents.md).
+Based on the [open agent skills standard](https://agents.md).
 
 ## Progressive Disclosure (3 levels)
 

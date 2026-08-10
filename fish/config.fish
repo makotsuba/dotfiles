@@ -1,5 +1,5 @@
 # Terminal.app から起動した別アプリへ専用設定を持ち込まない。
-# 非対話 fish でも実行して、VS Code automation などの環境変数を浄化する。
+# 非対話 fish でも実行し、VS Code automation などに引き継がれた専用環境変数を解除する。
 if test "$TERM_PROGRAM" != Apple_Terminal
     if test "$FISH_STARSHIP_CONFIG_APPLE_TERMINAL" = 1
         set -e STARSHIP_CONFIG
