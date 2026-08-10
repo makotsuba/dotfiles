@@ -14,3 +14,13 @@ claude/file-history/
 claude/plugins/
 claude/session-env
 tasks/
+/.DS_Store
+
+# Local shell state and credentials must never be committed.
+.env*
+**/.env*
+**/.direnv/
+fish/fish_history
+fish/fish_variables
+.aws/
+.ssh/

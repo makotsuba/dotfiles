@@ -4,6 +4,90 @@ set -e
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
+DOTFILES_BACKUP_DIR=""
+PYTHON3_BIN=""
+
+ensure_dotfiles_backup_dir() {
+    if [ -n "$DOTFILES_BACKUP_DIR" ]; then
+        return
+    fi
+
+    local backup_root="$HOME/.dotfiles-backups"
+    mkdir -p "$backup_root"
+    DOTFILES_BACKUP_DIR=$(mktemp -d "$backup_root/fish-starship-$(date +%Y%m%d-%H%M%S).XXXXXX")
+    echo "  backup directory: $DOTFILES_BACKUP_DIR"
+}
+
+validate_managed_target() {
+    local target="$1"
+
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
+        echo "Error: expected a file but found a directory: $target" >&2
+        echo "  Leave it unchanged and move it manually before rerunning the installer." >&2
+        return 1
+    fi
+}
+
+link_managed_file() {
+    local source="$1"
+    local target="$2"
+    local backup_name="$3"
+    local target_dir
+    target_dir=$(dirname "$target")
+
+    if [ ! -e "$source" ]; then
+        echo "Error: managed source is missing: $source" >&2
+        return 1
+    fi
+
+    mkdir -p "$target_dir"
+
+    if [ -L "$target" ] && [ -e "$target" ] && [ "$source" -ef "$target" ]; then
+        echo "  unchanged: $target"
+        return
+    fi
+
+    validate_managed_target "$target"
+
+    if [ -e "$target" ] || [ -L "$target" ]; then
+        ensure_dotfiles_backup_dir
+        local backup_target="$DOTFILES_BACKUP_DIR/$backup_name"
+        mkdir -p "$(dirname "$backup_target")"
+        mv "$target" "$backup_target"
+        echo "  backed up: $target -> $backup_target"
+    fi
+
+    ln -s "$source" "$target"
+    echo "  linked: $target -> $source"
+}
+
+resolve_python3() {
+    if [ -n "$PYTHON3_BIN" ]; then
+        return
+    fi
+
+    if command -v brew &>/dev/null; then
+        local homebrew_python_prefix
+        local homebrew_python
+        if homebrew_python_prefix=$(brew --prefix python 2>/dev/null); then
+            for homebrew_python in "$homebrew_python_prefix"/bin/python3.*; do
+                if [ -x "$homebrew_python" ] && "$homebrew_python" -c 'import tomllib' &>/dev/null; then
+                    PYTHON3_BIN="$homebrew_python"
+                    return
+                fi
+            done
+        fi
+    fi
+
+    if command -v python3 &>/dev/null; then
+        PYTHON3_BIN=$(command -v python3)
+        return
+    fi
+
+    echo "Error: Python 3 is required to install Codex settings." >&2
+    echo "  Run Homebrew Bundle first or install python3 manually." >&2
+    return 1
+}
 
 # OS detection
 detect_os() {
@@ -23,10 +107,11 @@ echo "Detected OS: $OS"
 mkdir -p "$CLAUDE_DIR/hooks" "$CLAUDE_DIR/agents" "$CLAUDE_DIR/skills/fix-issue" "$CLAUDE_DIR/skills/review-pr" "$CLAUDE_DIR/skills/skill-creator/references"
 
 # Create directories required by sandbox (must exist to be mounted/blocked)
-# bwrap cannot mount tmpfs on symlinks, so replace symlink with a real directory
+# bwrap cannot mount tmpfs on symlinks. Do not replace a user's symlink automatically.
 if [ -L "$HOME/.aws" ]; then
-    echo "  ~/.aws is a symlink; replacing with a real directory so bwrap can mount it..."
-    rm "$HOME/.aws"
+    echo "Error: ~/.aws is a symlink; the installer leaves it unchanged." >&2
+    echo "  Replace it with a real directory manually, then rerun the installer." >&2
+    exit 1
 fi
 mkdir -p "$HOME/.aws"
 
@@ -108,7 +193,11 @@ AGENTS_SKILLS_DIR="$HOME/.agents/skills"
 mkdir -p "$CODEX_HOOKS_DIR" "$CODEX_DIR/agents" "$AGENTS_SKILLS_DIR"
 
 merge_codex_config() {
-    python3 - <<PYEOF
+    if ! resolve_python3; then
+        return 1
+    fi
+
+    "$PYTHON3_BIN" - <<PYEOF
 import json
 import os
 import shutil
@@ -160,7 +249,8 @@ def load_existing(path):
         return {}
     if tomllib is None:
         raise RuntimeError(
-            "Codex config merge requires Python 3.11+ or the tomli package"
+            "Codex config merge requires Python 3.11+ or the tomli package. "
+            "Run Homebrew Bundle first or install tomli for the selected Python."
         )
     try:
         return tomllib.loads(raw)
@@ -297,7 +387,8 @@ for agent in "$DOTFILES_DIR/codex/agents/"*.toml; do
 done
 
 # Symlink skills to ~/.agents/skills/ (entire directory to include references/, scripts/, assets/)
-python3 - <<PYEOF
+resolve_python3
+"$PYTHON3_BIN" - <<PYEOF
 import os, shutil
 
 dotfiles_dir = "$DOTFILES_DIR"
@@ -344,6 +435,14 @@ case "$OS" in
         # Merge config.toml: preserve existing settings and add missing defaults
         merge_codex_config
 
+        echo "Installing WSL fish and Starship settings..."
+        validate_managed_target "$HOME/.config/fish/config.fish"
+        validate_managed_target "$HOME/.config/starship.toml"
+        validate_managed_target "$HOME/.config/fish/wsl-abbreviations.fish"
+        link_managed_file "$DOTFILES_DIR/fish/config.fish" "$HOME/.config/fish/config.fish" "fish/config.fish"
+        link_managed_file "$DOTFILES_DIR/starship/starship.toml" "$HOME/.config/starship.toml" "starship/starship.toml"
+        link_managed_file "$DOTFILES_DIR/fish/wsl-abbreviations.fish" "$HOME/.config/fish/wsl-abbreviations.fish" "fish/wsl-abbreviations.fish"
+
         echo "Codex WSL setup complete."
         ;;
     mac)
@@ -362,6 +461,16 @@ case "$OS" in
         mv "$TMP" "$CODEX_DIR/hooks.json"
 
         merge_codex_config
+
+        echo "Installing fish, Starship, and cmux terminal settings..."
+        validate_managed_target "$HOME/.config/fish/config.fish"
+        validate_managed_target "$HOME/.config/starship.toml"
+        validate_managed_target "$HOME/.config/starship-terminal.toml"
+        validate_managed_target "$HOME/.config/ghostty/config"
+        link_managed_file "$DOTFILES_DIR/fish/config.fish" "$HOME/.config/fish/config.fish" "fish/config.fish"
+        link_managed_file "$DOTFILES_DIR/starship/starship.toml" "$HOME/.config/starship.toml" "starship/starship.toml"
+        link_managed_file "$DOTFILES_DIR/starship/starship-terminal.toml" "$HOME/.config/starship-terminal.toml" "starship/starship-terminal.toml"
+        link_managed_file "$DOTFILES_DIR/ghostty/config" "$HOME/.config/ghostty/config" "ghostty/config"
 
         echo "Codex Mac setup complete."
         ;;
