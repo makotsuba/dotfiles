@@ -57,8 +57,8 @@ format = "[](fg:blue)[$symbol]($style)[](fg:blue) "
 [os.symbols]
 Macos = "  "
 Linux = "  "
-Ubuntu = "  "
-Debian = "  "
+Ubuntu = "  "
+Debian = "  "
 
 [sudo]
 disabled = false
