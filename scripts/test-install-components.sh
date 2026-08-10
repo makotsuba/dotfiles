@@ -88,6 +88,7 @@ run_codex_preflight_test() {
 run_codex_bwrap_preflight_test() {
     local home="$TEST_ROOT/codex-without-bwrap"
     local fake_bin="$TEST_ROOT/no-bwrap-bin"
+    local output="$TEST_ROOT/codex-without-bwrap-output.txt"
     local command_name
 
     mkdir -p "$fake_bin"
@@ -96,12 +97,13 @@ run_codex_bwrap_preflight_test() {
     done
 
     if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" PATH="$fake_bin" \
-        /bin/bash "$INSTALLER" --components codex >/dev/null 2>&1; then
+        /bin/bash "$INSTALLER" --components codex > "$output" 2>&1; then
         echo "Assertion failed: expected missing bwrap to stop Codex preflight" >&2
         exit 1
     fi
     assert_absent "$home/.codex"
     assert_absent "$home/.agents"
+    grep -Fq 'Error: required command is unavailable: bwrap' "$output"
 }
 
 run_claude_directory_target_preflight_test() {
@@ -147,6 +149,100 @@ run_claude_git_config_preflight_test() {
     fi
     assert_absent "$home/.claude"
     assert_absent "$home/.aws"
+}
+
+run_claude_readonly_git_config_preflight_test() {
+    local home="$TEST_ROOT/claude-readonly-git-config"
+    local output="$TEST_ROOT/claude-readonly-git-config-output.txt"
+
+    mkdir -p "$home"
+    printf '%s\n' '[core]' 'editor = vim' > "$home/gitconfig"
+    chmod a-w "$home/gitconfig"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected readonly Git config to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    grep -Fq "Error: global Git config is not writable: $home/gitconfig" "$output"
+}
+
+run_claude_unwritable_git_config_parent_preflight_test() {
+    local home="$TEST_ROOT/claude-unwritable-git-config-parent"
+    local config_parent="$home/readonly"
+    local output="$TEST_ROOT/claude-unwritable-git-config-parent-output.txt"
+
+    mkdir -p "$config_parent"
+    chmod a-w "$config_parent"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$config_parent/gitconfig" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected unwritable Git config parent to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    grep -Fq "Error: global Git config parent is not a writable real directory: $config_parent" "$output"
+}
+
+run_claude_existing_git_config_unwritable_parent_preflight_test() {
+    local home="$TEST_ROOT/claude-existing-git-config-unwritable-parent"
+    local config_parent="$home/readonly"
+    local config_path="$config_parent/gitconfig"
+    local output="$TEST_ROOT/claude-existing-git-config-unwritable-parent-output.txt"
+
+    mkdir -p "$config_parent"
+    printf '%s\n' '[core]' 'editor = vim' > "$config_path"
+    chmod a-w "$config_parent"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$config_path" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected existing Git config with unwritable parent to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    grep -Fq "Error: global Git config parent is not a writable real directory: $config_parent" "$output"
+}
+
+run_claude_missing_git_config_parent_preflight_test() {
+    local home="$TEST_ROOT/claude-missing-git-config-parent"
+    local config_parent="$home/missing"
+    local output="$TEST_ROOT/claude-missing-git-config-parent-output.txt"
+
+    mkdir -p "$home"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$config_parent/gitconfig" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected missing Git config parent to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    grep -Fq "Error: global Git config parent is not a writable real directory: $config_parent" "$output"
+}
+
+run_claude_git_config_symlink_preflight_test() {
+    local home="$TEST_ROOT/claude-git-config-symlink"
+    local external_config="$TEST_ROOT/claude-git-config-symlink-external"
+    local config_path="$home/gitconfig"
+    local output="$TEST_ROOT/claude-git-config-symlink-output.txt"
+
+    mkdir -p "$home"
+    printf '%s\n' '[core]' 'editor = vim' > "$external_config"
+    ln -s "$external_config" "$config_path"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$config_path" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected Git config symlink to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    assert_symlink "$config_path" "$external_config"
+    grep -Fq "Error: global Git config is not a regular file: $config_path" "$output"
 }
 
 run_codex_directory_target_preflight_test() {
@@ -314,6 +410,43 @@ run_wsl_rollback_failure_test() {
     grep -Fq "$backup_dir/fish/config.fish -> $home/.config/fish/config.fish" "$output"
 }
 
+run_wsl_signal_after_backup_test() {
+    local home="$TEST_ROOT/wsl-signal-after-backup"
+    local fake_bin="$TEST_ROOT/signal-after-backup-bin"
+    local output="$TEST_ROOT/signal-after-backup-output.txt"
+    local backup_dir
+
+    mkdir -p "$home/.config/fish" "$fake_bin"
+    printf '%s\n' 'echo signal-fish' > "$home/.config/fish/config.fish"
+    printf '%s\n' 'format = "signal-starship"' > "$home/.config/starship.toml"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'if [ "$1" = "${FAKE_MV_SIGNAL_TARGET:-}" ]; then' \
+        "    $(command -v mv) \"\\$@\"" \
+        '    kill -TERM "$PPID"' \
+        '    exit 0' \
+        'fi' \
+        "exec $(command -v mv) \"\\$@\"" > "$fake_bin/mv"
+    chmod +x "$fake_bin/mv"
+
+    if PATH="$fake_bin:$PATH" \
+        FAKE_MV_SIGNAL_TARGET="$home/.config/fish/config.fish" \
+        HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components shell > "$output" 2>&1; then
+        echo "Assertion failed: expected signal to interrupt shell install" >&2
+        exit 1
+    fi
+
+    test ! -L "$home/.config/fish/config.fish"
+    grep -qx 'echo signal-fish' "$home/.config/fish/config.fish"
+    grep -qx 'format = "signal-starship"' "$home/.config/starship.toml"
+    assert_absent "$home/.config/fish/wsl-abbreviations.fish"
+    backup_dir=$(find "$home/.dotfiles-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)
+    test -n "$backup_dir"
+    assert_absent "$backup_dir/fish/config.fish"
+    grep -Fq 'shell install failed; restoring previous targets' "$output"
+}
+
 run_macos_default_compatibility_test() {
     local home="$TEST_ROOT/macos-default-all"
     local backup_dir
@@ -340,10 +473,7 @@ run_macos_default_compatibility_test() {
 
 run_parser_tests
 run_codex_preflight_test
-run_codex_bwrap_preflight_test
 run_claude_directory_target_preflight_test
-run_claude_git_preflight_test
-run_claude_git_config_preflight_test
 run_codex_directory_target_preflight_test
 run_codex_backup_directory_preflight_test
 run_codex_config_symlink_preflight_test
@@ -355,10 +485,19 @@ case "$(uname -s)" in
         ;;
     Linux)
         if grep -qi microsoft /proc/version 2>/dev/null; then
+            run_codex_bwrap_preflight_test
+            run_claude_git_preflight_test
+            run_claude_git_config_preflight_test
+            run_claude_readonly_git_config_preflight_test
+            run_claude_unwritable_git_config_parent_preflight_test
+            run_claude_existing_git_config_unwritable_parent_preflight_test
+            run_claude_missing_git_config_parent_preflight_test
+            run_claude_git_config_symlink_preflight_test
             run_default_compatibility_test
             run_wsl_success_test
             run_wsl_rollback_test
             run_wsl_rollback_failure_test
+            run_wsl_signal_after_backup_test
         else
             echo "Error: WSL integration tests require a WSL runner" >&2
             exit 1

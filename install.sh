@@ -14,7 +14,7 @@ INSTALL_CLAUDE=false
 INSTALL_CODEX=false
 INSTALL_SHELL=false
 SHELL_TRANSACTION_ACTIVE=false
-SHELL_LINKED_TARGETS=()
+SHELL_LINK_ATTEMPTS=()
 SHELL_BACKUP_TARGETS=()
 SHELL_BACKUP_SOURCES=()
 
@@ -135,30 +135,36 @@ require_command() {
 
 preflight_global_git_config() {
     local config_path
-    local config_exists=false
+    local config_parent
 
     if [ -n "${GIT_CONFIG_GLOBAL:-}" ]; then
         config_path="$GIT_CONFIG_GLOBAL"
-        if [ -e "$config_path" ] || [ -L "$config_path" ]; then
-            config_exists=true
-        fi
+    elif [ -e "$HOME/.gitconfig" ] || [ -L "$HOME/.gitconfig" ]; then
+        config_path="$HOME/.gitconfig"
+    elif [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" ] || \
+         [ -L "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" ]; then
+        config_path="${XDG_CONFIG_HOME:-$HOME/.config}/git/config"
     else
-        for config_path in \
-            "$HOME/.gitconfig" \
-            "${XDG_CONFIG_HOME:-$HOME/.config}/git/config"; do
-            if [ -e "$config_path" ] || [ -L "$config_path" ]; then
-                if [ ! -f "$config_path" ]; then
-                    fail "global Git config is not a regular file: $config_path"
-                    return 1
-                fi
-                config_exists=true
-            fi
-        done
+        config_path="$HOME/.gitconfig"
     fi
 
-    if [ "$config_exists" = false ]; then
-        return
+    config_parent=$(dirname "$config_path")
+    if [ ! -d "$config_parent" ] || [ -L "$config_parent" ] || [ ! -w "$config_parent" ]; then
+        fail "global Git config parent is not a writable real directory: $config_parent"
+        return 1
     fi
+
+    if [ -e "$config_path" ] || [ -L "$config_path" ]; then
+        if [ -L "$config_path" ] || [ ! -f "$config_path" ]; then
+            fail "global Git config is not a regular file: $config_path"
+            return 1
+        fi
+        if [ ! -w "$config_path" ]; then
+            fail "global Git config is not writable: $config_path"
+            return 1
+        fi
+    fi
+
     if ! git config --global --list >/dev/null 2>&1; then
         fail "global Git config is unreadable; repair it before selecting Claude"
         return 1
@@ -367,6 +373,10 @@ preflight_claude_component() {
 }
 
 install_claude_component() {
+    if [ "$OS" = "wsl" ]; then
+        git config --global core.sshCommand ssh.exe
+    fi
+
     mkdir -p "$CLAUDE_DIR/hooks" "$CLAUDE_DIR/agents" \
         "$CLAUDE_DIR/skills/fix-issue" "$CLAUDE_DIR/skills/review-pr" \
         "$CLAUDE_DIR/skills/skill-creator/references" "$HOME/.aws"
@@ -405,10 +415,6 @@ install_claude_component() {
     temporary_settings=$(mktemp "$CLAUDE_DIR/settings.json.XXXXXX")
     sed "s|__HOOKS_DIR__|$HOOKS_DIR|g" "$settings_source" > "$temporary_settings"
     mv "$temporary_settings" "$CLAUDE_DIR/settings.json"
-
-    if [ "$OS" = "wsl" ]; then
-        git config --global core.sshCommand ssh.exe
-    fi
 
     echo "Done! Claude Code dotfiles installed to $CLAUDE_DIR"
 }
@@ -827,8 +833,8 @@ rollback_shell_component() {
     echo "  shell install failed; restoring previous targets" >&2
     local rollback_failed=false
     local index
-    for ((index=${#SHELL_LINKED_TARGETS[@]} - 1; index >= 0; index--)); do
-        local target="${SHELL_LINKED_TARGETS[$index]}"
+    for ((index=${#SHELL_LINK_ATTEMPTS[@]} - 1; index >= 0; index--)); do
+        local target="${SHELL_LINK_ATTEMPTS[$index]}"
         if [ -L "$target" ] && ! unlink "$target"; then
             local has_backup=false
             local backup_index
@@ -848,14 +854,17 @@ rollback_shell_component() {
         local target="${SHELL_BACKUP_TARGETS[$index]}"
         local backup="${SHELL_BACKUP_SOURCES[$index]}"
         if [ -e "$backup" ] || [ -L "$backup" ]; then
-            if ! mkdir -p "$(dirname "$target")"; then
+            if [ -e "$target" ] || [ -L "$target" ]; then
+                echo "Error: target exists during shell rollback: $target" >&2
+                rollback_failed=true
+            elif ! mkdir -p "$(dirname "$target")"; then
                 echo "Error: failed to recreate target directory during rollback: $target" >&2
                 rollback_failed=true
             elif ! mv "$backup" "$target"; then
                 echo "Error: failed to restore backup during rollback: $backup -> $target" >&2
                 rollback_failed=true
             fi
-        else
+        elif [ ! -e "$target" ] && [ ! -L "$target" ]; then
             echo "Error: backup disappeared during rollback: $backup" >&2
             rollback_failed=true
         fi
@@ -874,11 +883,10 @@ rollback_shell_component() {
 }
 
 handle_shell_interruption() {
-    local status="$1"
     if ! rollback_shell_component; then
         exit 1
     fi
-    exit "$status"
+    exit 1
 }
 
 finish_failed_shell_component() {
@@ -891,7 +899,7 @@ finish_failed_shell_component() {
 
 install_shell_component() {
     configure_shell_component
-    SHELL_LINKED_TARGETS=()
+    SHELL_LINK_ATTEMPTS=()
     SHELL_BACKUP_TARGETS=()
     SHELL_BACKUP_SOURCES=()
     SHELL_TRANSACTION_ACTIVE=true
@@ -932,20 +940,20 @@ install_shell_component() {
 
         if [ -e "$target" ] || [ -L "$target" ]; then
             backup="$DOTFILES_BACKUP_DIR/${SHELL_BACKUP_NAMES[$index]}"
+            SHELL_BACKUP_TARGETS+=("$target")
+            SHELL_BACKUP_SOURCES+=("$backup")
             if ! mkdir -p "$(dirname "$backup")" || ! mv "$target" "$backup"; then
                 finish_failed_shell_component || return 1
                 return 1
             fi
-            SHELL_BACKUP_TARGETS+=("$target")
-            SHELL_BACKUP_SOURCES+=("$backup")
             echo "  backed up: $target -> $backup"
         fi
 
+        SHELL_LINK_ATTEMPTS+=("$target")
         if ! ln -s "$source" "$target"; then
             finish_failed_shell_component || return 1
             return 1
         fi
-        SHELL_LINKED_TARGETS+=("$target")
         echo "  linked: $target -> $source"
     done
 

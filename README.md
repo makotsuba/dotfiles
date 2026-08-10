@@ -66,8 +66,10 @@ WSL の fish と主 Starship profile は、監査後に shell component で管�
 ```bash
 command -v fish starship op.exe ssh.exe ssh-add.exe
 cd ~/dotfiles
-bash install.sh --components codex,shell
+bash install.sh --components shell
 ```
+
+Codex も同時に導入する場合は、`bash install.sh --components codex,shell` を使います。
 
 installer は既存の通常ファイル・別先の symlink・dangling symlink を `~/.dotfiles-backups/fish-starship-*/` へ退避してから、次の3ファイルを管理します。実ディレクトリが置かれている場合は安全のため停止し、変更しません。
 
