@@ -255,7 +255,7 @@ fish の `fish_history`・`fish_variables`・補完キャッシュ、`.env*`、d
 
 ## Codex Notes
 
-- `researcher` subagent は `codex/agents/researcher.toml` で定義しています。PR レビューは組み込みの `$review-agent` skill へ委譲します。
+- `researcher` subagent は `codex/agents/researcher.toml` で定義しています。PR レビューは組み込みの `review-agent` skill へ委譲します。
 - skills は `codex/skills/` から `~/.agents/skills/` へ symlink されます。
 - `sandbox_mode = "workspace-write"` と `approval_policy = "on-request"` を default に明示し、未設定環境では Codex の low-friction sandbox を既定値依存ではなく設定から適用します。
 - `~/.codex/config.toml` は既存設定を保持したまま、足りないデフォルト値だけを追加します。default では `features.memories = true` を有効化し、更新前の内容は `~/.codex/config.toml.bak` に退避します。

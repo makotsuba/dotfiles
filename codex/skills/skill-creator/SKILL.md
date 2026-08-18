@@ -78,7 +78,7 @@ Follow these steps:
 - Be specific and actionable ("Run `gh pr view`" not "Check the PR")
 - **Quote `$ARGUMENTS` in shell commands**: always write `"$ARGUMENTS"` to prevent injection
 - Include error handling for likely failure points
-- Reference subagents/skills where appropriate (researcher subagent, $review-agent skill)
+- Reference subagents/skills where appropriate (researcher subagent, review-agent skill)
 
 #### Security rules (MUST follow)
 
