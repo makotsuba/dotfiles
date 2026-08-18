@@ -85,6 +85,58 @@ run_codex_preflight_test() {
     assert_absent "$home/.codex/config.toml.bak"
 }
 
+run_codex_reviewer_migration_test() {
+    local home="$TEST_ROOT/codex-reviewer-migration"
+    local legacy_target="$home/.codex/agents/reviewer.toml"
+
+    mkdir -p "$home/.codex/agents"
+    ln -s "$DOTFILES_DIR/codex/agents/reviewer.toml" "$legacy_target"
+
+    HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components codex
+
+    assert_absent "$legacy_target"
+    assert_symlink "$home/.codex/agents/researcher.toml" "$DOTFILES_DIR/codex/agents/researcher.toml"
+}
+
+run_codex_unmanaged_reviewer_symlink_test() {
+    local home="$TEST_ROOT/codex-unmanaged-reviewer"
+    local external_agent="$TEST_ROOT/external-reviewer.toml"
+    local target="$home/.codex/agents/reviewer.toml"
+
+    printf '%s\n' 'name = "reviewer"' > "$external_agent"
+    mkdir -p "$home/.codex/agents"
+    ln -s "$external_agent" "$target"
+
+    HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components codex
+
+    assert_symlink "$target" "$external_agent"
+}
+
+run_codex_reviewer_migration_failure_test() {
+    local home="$TEST_ROOT/codex-reviewer-migration-failure"
+    local fake_bin="$TEST_ROOT/codex-reviewer-migration-failure-bin"
+    local legacy_target="$home/.codex/agents/reviewer.toml"
+
+    mkdir -p "$home/.codex/agents" "$fake_bin"
+    ln -s "$DOTFILES_DIR/codex/agents/reviewer.toml" "$legacy_target"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'if [ "$1" = "${FAKE_UNLINK_FAILURE_TARGET:-}" ]; then exit 1; fi' \
+        "exec $(command -v unlink) \"\$@\"" > "$fake_bin/unlink"
+    chmod +x "$fake_bin/unlink"
+
+    if PATH="$fake_bin:$PATH" FAKE_UNLINK_FAILURE_TARGET="$legacy_target" \
+        HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components codex >/dev/null 2>&1; then
+        echo "Assertion failed: expected legacy reviewer migration failure" >&2
+        exit 1
+    fi
+
+    assert_symlink "$legacy_target" "$DOTFILES_DIR/codex/agents/reviewer.toml"
+    assert_absent "$home/.codex/AGENTS.md"
+    assert_absent "$home/.agents"
+}
+
 run_codex_bwrap_preflight_test() {
     local home="$TEST_ROOT/codex-without-bwrap"
     local fake_bin="$TEST_ROOT/no-bwrap-bin"
@@ -473,6 +525,9 @@ run_macos_default_compatibility_test() {
 
 run_parser_tests
 run_codex_preflight_test
+run_codex_reviewer_migration_test
+run_codex_unmanaged_reviewer_symlink_test
+run_codex_reviewer_migration_failure_test
 run_claude_directory_target_preflight_test
 run_codex_directory_target_preflight_test
 run_codex_backup_directory_preflight_test

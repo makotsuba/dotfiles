@@ -11,7 +11,7 @@
 ### 2. Subagent Strategy
 
 - Use the researcher subagent for codebase exploration before implementation
-- Use the reviewer subagent after implementation for an unbiased second opinion
+- Use the `$review-agent` skill after implementation for an unbiased second opinion
 - One focused task per subagent
 
 ### 3. Self-Improvement Loop

@@ -277,6 +277,20 @@ force_link() {
     fi
 }
 
+remove_obsolete_managed_codex_reviewer_agent() {
+    local target="$CODEX_DIR/agents/reviewer.toml"
+    local legacy_source="$DOTFILES_DIR/codex/agents/reviewer.toml"
+
+    if [ ! -L "$target" ] || [ "$(readlink "$target")" != "$legacy_source" ]; then
+        return
+    fi
+    if ! unlink "$target"; then
+        fail "could not remove obsolete managed Codex reviewer agent: $target"
+        return 1
+    fi
+    echo "  removed obsolete managed agent: $target"
+}
+
 preflight_claude_component() {
     local source
     local target
@@ -732,8 +746,9 @@ preflight_codex_component() {
 }
 
 install_codex_component() {
-    mkdir -p "$CODEX_HOOKS_DIR" "$CODEX_DIR/agents" "$AGENTS_SKILLS_DIR"
+    remove_obsolete_managed_codex_reviewer_agent || return 1
 
+    mkdir -p "$CODEX_HOOKS_DIR" "$CODEX_DIR/agents" "$AGENTS_SKILLS_DIR"
     force_link "$DOTFILES_DIR/codex/AGENTS.md" "$CODEX_DIR/AGENTS.md"
 
     local agent
