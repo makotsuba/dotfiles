@@ -63,3 +63,10 @@
 
 Always respond in Japanese. Use Japanese for all explanations, comments, and communications.
 Technical terms and code identifiers remain in their original form.
+
+## Migrated Shared Conventions
+
+- When creating a Git commit, use Conventional Commits format; keep Japanese subject lines under 72 characters.
+- When modifying AWS CDK or CloudFormation, write any `description` passed to AWS APIs in English and never include sensitive information.
+- When the `keelctl.notify` MCP is available, show the result before sending an appropriate notification after any task or file update that took 5+ minutes. Do not use the disabled `keelctl.speak`.
+- Keep routine completion reports concise; add detail only when necessary.
