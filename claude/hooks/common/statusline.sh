@@ -6,7 +6,7 @@
 #
 # Context % uses Claude Code's pre-calculated remaining_percentage,
 # which accounts for compaction reserves. 100% = compaction fires.
-# API usage limits are fetched via OAuth API, cached for 5 minutes, non-blocking.
+# API usage limits are read directly from Claude Code's stdin JSON (rate_limits).
 
 # Read stdin (Claude Code passes JSON data via stdin)
 stdin_data=$(cat)
@@ -43,11 +43,33 @@ if [[ -z "$current_dir" ]] && [[ -z "$model_name" ]]; then
     : "${duration_ms:=0}"
 fi
 
+# Rate limits — provided directly by Claude Code in stdin (no API call needed).
+# `resets_at` is a Unix epoch integer. `-` prevents empty TSV fields from
+# collapsing under Bash 3.2's whitespace IFS handling.
+IFS=$'\t' read -r fh_pct fh_reset sd_pct sd_reset < <(
+    echo "$stdin_data" | jq -r '[
+        (try (
+            if (.rate_limits.five_hour.used_percentage // null) != null then
+                (.rate_limits.five_hour.used_percentage | floor | tostring)
+            else "-" end
+        ) catch "-"),
+        (try (.rate_limits.five_hour.resets_at // "-" | tostring) catch "-"),
+        (try (
+            if (.rate_limits.seven_day.used_percentage // null) != null then
+                (.rate_limits.seven_day.used_percentage | floor | tostring)
+            else "-" end
+        ) catch "-"),
+        (try (.rate_limits.seven_day.resets_at // "-" | tostring) catch "-")
+    ] | @tsv' 2>/dev/null
+)
+[[ "$fh_pct" == "-" ]] && fh_pct=""
+[[ "$fh_reset" == "-" ]] && fh_reset=""
+[[ "$sd_pct" == "-" ]] && sd_pct=""
+[[ "$sd_reset" == "-" ]] && sd_reset=""
+
 # Git info
-if cd "$current_dir" 2>/dev/null; then
-    git_branch=$(git -c core.useBuiltinFSMonitor=false branch --show-current 2>/dev/null)
-    git_root=$(git -c core.useBuiltinFSMonitor=false rev-parse --show-toplevel 2>/dev/null)
-fi
+git_branch=$(git -C "$current_dir" -c core.useBuiltinFSMonitor=false branch --show-current 2>/dev/null)
+git_root=$(git -C "$current_dir" -c core.useBuiltinFSMonitor=false rev-parse --show-toplevel 2>/dev/null)
 
 # Build repo path display (folder name only for brevity)
 if [[ -n "$git_root" ]] && [[ "$current_dir" == "$git_root" ]]; then
@@ -86,85 +108,35 @@ else
     ctx_pct=""
 fi
 
-# === API Usage Limits (5h / 7d) — cached, non-blocking ===
-CACHE_FILE="${TMPDIR:-/tmp}/claude_statusline_usage_${UID}.json"
-CACHE_TTL=300  # 5 minutes
-
-# Detect GNU vs BSD date once at startup
+# Detect GNU vs BSD date
 if date --version >/dev/null 2>&1; then
     _DATE_GNU=1
 else
     _DATE_GNU=0
 fi
 
-# Strip fractional seconds and timezone from ISO 8601 for BSD date parsing.
-# Handles: +HH:MM, -HH:MM, Z suffixes.
-_iso_strip_tz() {
-    echo "$1" | sed -E 's/(\.[0-9]*)?(Z|[-+][0-9]{2}:[0-9]{2})?$//'
-}
-
-_iso_to_epoch() {
-    local iso="$1"
-    if [[ "$_DATE_GNU" == "1" ]]; then
-        date -d "$iso" +%s 2>/dev/null
-    else
-        # TZ=UTC ensures stripped datetime is interpreted as UTC, not local time
-        TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$(_iso_strip_tz "$iso")" +%s 2>/dev/null
-    fi
-}
-
-_fetch_usage_bg() {
-    local lock_file="${CACHE_FILE}.lock"
-    # mkdir is atomic — only one process succeeds
-    mkdir "$lock_file" 2>/dev/null || return
-    trap 'rm -rf "$lock_file"' EXIT
-    local token
-    token=$(jq -r '.claudeAiOauth.accessToken' ~/.claude/.credentials.json 2>/dev/null)
-    # macOS Keychain fallback (credentials.json not created on Mac)
-    if [[ "$OSTYPE" == darwin* ]] && { [[ -z "$token" ]] || [[ "$token" == "null" ]]; }; then
-        token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
-            | jq -r '.claudeAiOauth.accessToken' 2>/dev/null)
-    fi
-    if [[ -n "$token" ]] && [[ "$token" != "null" ]]; then
-        # Sanity check: reject if token contains newlines or curl config metacharacters
-        [[ "$token" =~ ^[A-Za-z0-9._/+=~-]+$ ]] || return
-        local result
-        # Pass token via stdin (--config -) to avoid exposure in process list (ps aux)
-        result=$(printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" \
-            | curl -s --max-time 5 --config - "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-        if echo "$result" | jq -e '.five_hour' >/dev/null 2>&1; then
-            # umask 077: file is created 600 from the start, no world-readable window
-            (umask 077; echo "{\"ts\":$(date +%s),\"data\":$result}" > "$CACHE_FILE")
-        fi
-    fi
-    rm -rf "$lock_file"
-}
-
-# Format ISO reset time → local, compact (cross-platform: Linux & macOS)
+# Format Unix epoch → local, compact
 #   within 24h → "16:00"
 #   further    → "3/20"
 _format_reset() {
-    local iso="$1"
-    [[ -z "$iso" ]] && return
-    local now reset_epoch diff
+    local epoch="$1"
+    [[ -z "$epoch" ]] && return 1
+    [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+    local now diff
     now=$(date +%s)
-    reset_epoch=$(_iso_to_epoch "$iso") || return
-    [[ -z "$reset_epoch" ]] && return
-    diff=$((reset_epoch - now))
-    [[ "$diff" -lt 0 ]] && return  # already elapsed — don't display stale time
+    diff=$((epoch - now))
+    [[ "$diff" -lt 0 ]] && return 1
     if [ "$diff" -le 86400 ]; then
-        # Within 24 hours: time only — display via epoch (auto local time on both platforms)
         if [[ "$_DATE_GNU" == "1" ]]; then
-            date -d "@$reset_epoch" '+%H:%M' 2>/dev/null
+            date -d "@$epoch" '+%H:%M' 2>/dev/null
         else
-            date -j -r "$reset_epoch" '+%H:%M' 2>/dev/null
+            date -j -r "$epoch" '+%H:%M' 2>/dev/null
         fi
     else
-        # Further away: date only
         if [[ "$_DATE_GNU" == "1" ]]; then
-            date -d "@$reset_epoch" '+%-m/%-d' 2>/dev/null
+            date -d "@$epoch" '+%-m/%-d' 2>/dev/null
         else
-            date -j -r "$reset_epoch" '+%-m/%-d' 2>/dev/null
+            date -j -r "$epoch" '+%m/%d' 2>/dev/null | sed 's|^0*\([0-9][0-9]*\)/0*\([0-9][0-9]*\)|\1/\2|'
         fi
     fi
 }
@@ -172,30 +144,12 @@ _format_reset() {
 # Usage color: green / yellow / red
 _usage_color() {
     local pct="$1"
+    [[ "$pct" =~ ^[0-9]+$ ]] || return
     if   [ "$pct" -lt 50 ]; then printf '\033[32m'
     elif [ "$pct" -lt 80 ]; then printf '\033[33m'
     else                          printf '\033[31m'
     fi
 }
-
-usage_json=""
-# Remove stale lock left by SIGKILL (trap does not fire on forced termination).
-# Runs unconditionally so the else-branch (no cache file yet) is also covered.
-find "${CACHE_FILE}.lock" -maxdepth 0 -type d -mmin +1 \
-    -exec rm -rf {} \; 2>/dev/null
-if [[ -f "$CACHE_FILE" ]]; then
-    cached_ts=$(jq -r '.ts // 0' "$CACHE_FILE" 2>/dev/null)
-    now=$(date +%s)
-    age=$((now - ${cached_ts:-0}))
-    usage_json=$(jq -r '.data' "$CACHE_FILE" 2>/dev/null)
-    if [ "$age" -ge "$CACHE_TTL" ] && [[ ! -d "${CACHE_FILE}.lock" ]]; then
-        (_fetch_usage_bg) &>/dev/null &
-        disown
-    fi
-else
-    (_fetch_usage_bg) &>/dev/null &
-    disown
-fi
 
 # Separator
 SEP='\033[2m│\033[0m'
@@ -240,37 +194,42 @@ if [[ -n "$ctx_pct" ]]; then
     fi
 fi
 if [[ -n "$session_time" ]]; then
-    line2="$line2 $(printf '%b \033[36m⌚ %s\033[0m' "$SEP" "$session_time")"
+    if [[ -n "$line2" ]]; then
+        line2="$line2 $(printf '%b \033[36m⌚ %s\033[0m' "$SEP" "$session_time")"
+    else
+        line2=$(printf '\033[36m⌚ %s\033[0m' "$session_time")
+    fi
 fi
 
-# Append 5h / 7d usage if available
-if [[ -n "$usage_json" ]] && [[ "$usage_json" != "null" ]]; then
-    # Use "-" fallback for resets_at: prevents consecutive empty tabs from collapsing
-    # fields (bash 3.2 IFS whitespace behavior). "-" fails _format_reset silently → "".
-    # WARNING: do not change "-" to "" — empty fallback reintroduces the tab-collapse bug.
-    IFS=$'\t' read -r fh_pct fh_reset sd_pct sd_reset < <(
-        echo "$usage_json" | jq -r '[
-            (.five_hour.utilization  // 0 | floor),
-            (.five_hour.resets_at   // "-"),
-            (.seven_day.utilization  // 0 | floor),
-            (.seven_day.resets_at   // "-")
-        ] | @tsv'
-    )
-
+# Append each usage window only when Claude Code supplied it.
+fh_str=""
+sd_str=""
+if [[ -n "$fh_pct" ]]; then
     fh_time=$(_format_reset "$fh_reset")
-    sd_time=$(_format_reset "$sd_reset")
     fh_color=$(_usage_color "$fh_pct")
-    sd_color=$(_usage_color "$sd_pct")
-
-    fh_str=$(printf "${fh_color}5h %s%%\033[0m" "$fh_pct")
+    fh_str=$(printf '%b5h %s%%\033[0m' "$fh_color" "$fh_pct")
     [[ -n "$fh_time" ]] && fh_str="$fh_str $(printf '\033[37m→ %s\033[0m' "$fh_time")"
-    sd_str=$(printf "${sd_color}7d %s%%\033[0m" "$sd_pct")
+fi
+if [[ -n "$sd_pct" ]]; then
+    sd_time=$(_format_reset "$sd_reset")
+    sd_color=$(_usage_color "$sd_pct")
+    sd_str=$(printf '%b7d %s%%\033[0m' "$sd_color" "$sd_pct")
     [[ -n "$sd_time" ]] && sd_str="$sd_str $(printf '\033[37m→ %s\033[0m' "$sd_time")"
-
+fi
+if [[ -n "$fh_str" ]] && [[ -n "$sd_str" ]]; then
+    usage_str=$(printf '%b %b %b' "$fh_str" "$SEP" "$sd_str")
+elif [[ -n "$fh_str" ]]; then
+    usage_str="$fh_str"
+elif [[ -n "$sd_str" ]]; then
+    usage_str="$sd_str"
+else
+    usage_str=""
+fi
+if [[ -n "$usage_str" ]]; then
     if [[ -n "$line2" ]]; then
-        line2="$line2 $(printf '%b %b %b %b' "$SEP" "$fh_str" "$SEP" "$sd_str")"
+        line2="$line2 $(printf '%b %b' "$SEP" "$usage_str")"
     else
-        line2=$(printf '%b %b %b' "$fh_str" "$SEP" "$sd_str")
+        line2="$usage_str"
     fi
 fi
 
