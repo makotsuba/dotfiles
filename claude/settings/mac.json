@@ -37,7 +37,6 @@
     "deny": [
       "Read(.env)",
       "Edit(.env)",
-      "Write(.env)",
       "Read(~/.ssh/**)",
       "Read(~/.aws/**)",
       "Bash(rm *)",
