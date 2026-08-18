@@ -1,3 +1,8 @@
+# マシン固有の設定（バージョンマネージャの init、社内 CA バンドルなど）は
+# ここに書かず ~/.config/fish/conf.d/local.fish（非トラッキング）に置く。
+# conf.d は config.fish の内容と無関係に fish が自動 source するため、
+# install.sh --components shell で config.fish を差し替えても影響を受けない。
+
 # Terminal.app から起動した別アプリへ専用設定を持ち込まない。
 # 非対話 fish でも実行し、VS Code automation などに引き継がれた専用環境変数を解除する。
 if test "$TERM_PROGRAM" != Apple_Terminal
