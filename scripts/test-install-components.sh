@@ -1,0 +1,720 @@
+#!/bin/bash
+set -e
+
+DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INSTALLER="$DOTFILES_DIR/install.sh"
+: "${TEST_ROOT:?Set TEST_ROOT to an empty temporary directory before running this test.}"
+
+if [ ! -d "$TEST_ROOT" ] || [ -n "$(find "$TEST_ROOT" -mindepth 1 -print -quit)" ]; then
+    echo "Error: TEST_ROOT must be an empty directory: $TEST_ROOT" >&2
+    exit 1
+fi
+
+assert_absent() {
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        echo "Assertion failed: expected absent: $1" >&2
+        exit 1
+    fi
+}
+
+assert_symlink() {
+    if [ ! -L "$1" ] || [ "$(readlink "$1")" != "$2" ]; then
+        echo "Assertion failed: expected symlink: $1 -> $2" >&2
+        exit 1
+    fi
+}
+
+expect_argument_error() {
+    local name="$1"
+    local expected_message="$2"
+    shift 2
+    local home="$TEST_ROOT/parser-$name"
+    local output="$TEST_ROOT/parser-$name-output"
+
+    mkdir -p "$home"
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" "$@" > "$output" 2>&1; then
+        echo "Assertion failed: expected argument error: $name" >&2
+        exit 1
+    fi
+    grep -Fq "$expected_message" "$output"
+    assert_absent "$home/.claude"
+    assert_absent "$home/.codex"
+    assert_absent "$home/.kiro"
+    assert_absent "$home/.config"
+}
+
+expect_component_error() {
+    local spec="$1"
+    local home="$TEST_ROOT/parser-${spec//,/--}"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components "$spec" >/dev/null 2>&1; then
+        echo "Assertion failed: expected parser error: $spec" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.codex"
+    assert_absent "$home/.kiro"
+    assert_absent "$home/.config"
+}
+
+run_help_test() {
+    local output="$TEST_ROOT/help-output"
+
+    bash "$INSTALLER" --help > "$output"
+    grep -Fq 'Usage: bash install.sh --components <component>[,<component>...]' "$output"
+    if grep -Fq -- '--components all' "$output"; then
+        echo 'Assertion failed: help must not advertise the all alias' >&2
+        exit 1
+    fi
+}
+
+run_parser_tests() {
+    expect_argument_error "no-arguments" \
+        "Error: --components is required; choose one or more of: claude,codex,kiro,shell"
+    expect_argument_error "missing-components-value" \
+        "Error: --components requires a comma-separated list" \
+        --components
+    expect_component_error ""
+    expect_argument_error "all-alias" \
+        'Error: component "all" is not supported; list component names explicitly' \
+        --components all
+    expect_component_error "codex,"
+    expect_component_error "codex,codex"
+    expect_component_error "kiro,kiro"
+    expect_component_error "unknown"
+}
+
+run_missing_jq_preflight_test() {
+    local component
+    local home
+    local fake_bin
+    local output
+
+    for component in claude codex; do
+        home="$TEST_ROOT/$component-without-jq"
+        fake_bin="$TEST_ROOT/$component-without-jq-bin"
+        output="$TEST_ROOT/$component-without-jq-output.txt"
+        mkdir -p "$home" "$fake_bin"
+        ln -s /usr/bin/dirname "$fake_bin/dirname"
+        ln -s /usr/bin/grep "$fake_bin/grep"
+
+        if PATH="$fake_bin" HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+            /bin/bash "$INSTALLER" --components "$component" > "$output" 2>&1; then
+            echo "Assertion failed: expected missing jq to stop $component preflight" >&2
+            exit 1
+        fi
+        grep -Fq 'Error: required command is unavailable: jq' "$output"
+        assert_absent "$home/.claude"
+        assert_absent "$home/.codex"
+        assert_absent "$home/.aws"
+    done
+}
+
+run_wsl_success_test() {
+    local home="$TEST_ROOT/wsl-success"
+    local backup_dir
+
+    mkdir -p "$home/.config/fish"
+    printf '%s\n' 'echo original-fish' > "$home/.config/fish/config.fish"
+    printf '%s\n' 'format = "original-starship"' > "$home/.config/starship.toml"
+
+    HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components codex,shell
+
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    assert_absent "$home/gitconfig"
+    assert_symlink "$home/.config/fish/config.fish" "$DOTFILES_DIR/fish/config.fish"
+    assert_symlink "$home/.config/fish/wsl-abbreviations.fish" "$DOTFILES_DIR/fish/wsl-abbreviations.fish"
+    assert_symlink "$home/.config/starship.toml" "$DOTFILES_DIR/starship/starship.toml"
+    assert_symlink "$home/.codex/AGENTS.md" "$DOTFILES_DIR/codex/AGENTS.md"
+    assert_symlink "$home/.agents/skills/fix-issue" "$DOTFILES_DIR/codex/skills/fix-issue"
+
+    backup_dir=$(find "$home/.dotfiles-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)
+    test -n "$backup_dir"
+    grep -qx 'echo original-fish' "$backup_dir/fish/config.fish"
+    grep -qx 'format = "original-starship"' "$backup_dir/starship/starship.toml"
+}
+
+run_codex_preflight_test() {
+    local home="$TEST_ROOT/codex-preflight"
+
+    mkdir -p "$home/.codex"
+    printf '%s\n' '[features]' 'unsupported = [{ name = "value" }]' > "$home/.codex/config.toml"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components codex >/dev/null 2>&1; then
+        echo "Assertion failed: expected unsupported TOML to stop Codex preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.codex/AGENTS.md"
+    assert_absent "$home/.codex/hooks"
+    assert_absent "$home/.agents"
+    assert_absent "$home/.codex/config.toml.bak"
+}
+
+run_codex_reviewer_migration_test() {
+    local home="$TEST_ROOT/codex-reviewer-migration"
+    local legacy_target="$home/.codex/agents/reviewer.toml"
+
+    mkdir -p "$home/.codex/agents"
+    ln -s "$DOTFILES_DIR/codex/agents/reviewer.toml" "$legacy_target"
+
+    HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components codex
+
+    assert_absent "$legacy_target"
+    assert_symlink "$home/.codex/agents/researcher.toml" "$DOTFILES_DIR/codex/agents/researcher.toml"
+}
+
+run_codex_unmanaged_reviewer_symlink_test() {
+    local home="$TEST_ROOT/codex-unmanaged-reviewer"
+    local external_agent="$TEST_ROOT/external-reviewer.toml"
+    local target="$home/.codex/agents/reviewer.toml"
+
+    printf '%s\n' 'name = "reviewer"' > "$external_agent"
+    mkdir -p "$home/.codex/agents"
+    ln -s "$external_agent" "$target"
+
+    HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components codex
+
+    assert_symlink "$target" "$external_agent"
+}
+
+run_codex_reviewer_migration_failure_test() {
+    local home="$TEST_ROOT/codex-reviewer-migration-failure"
+    local fake_bin="$TEST_ROOT/codex-reviewer-migration-failure-bin"
+    local legacy_target="$home/.codex/agents/reviewer.toml"
+
+    mkdir -p "$home/.codex/agents" "$fake_bin"
+    ln -s "$DOTFILES_DIR/codex/agents/reviewer.toml" "$legacy_target"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'if [ "$1" = "${FAKE_UNLINK_FAILURE_TARGET:-}" ]; then exit 1; fi' \
+        "exec $(command -v unlink) \"\$@\"" > "$fake_bin/unlink"
+    chmod +x "$fake_bin/unlink"
+
+    if PATH="$fake_bin:$PATH" FAKE_UNLINK_FAILURE_TARGET="$legacy_target" \
+        HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components codex >/dev/null 2>&1; then
+        echo "Assertion failed: expected legacy reviewer migration failure" >&2
+        exit 1
+    fi
+
+    assert_symlink "$legacy_target" "$DOTFILES_DIR/codex/agents/reviewer.toml"
+    assert_absent "$home/.codex/AGENTS.md"
+    assert_absent "$home/.agents"
+}
+
+run_codex_bwrap_preflight_test() {
+    local home="$TEST_ROOT/codex-without-bwrap"
+    local fake_bin="$TEST_ROOT/no-bwrap-bin"
+    local output="$TEST_ROOT/codex-without-bwrap-output.txt"
+    local command_name
+
+    mkdir -p "$fake_bin"
+    for command_name in dirname grep jq; do
+        ln -s "$(command -v "$command_name")" "$fake_bin/$command_name"
+    done
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" PATH="$fake_bin" \
+        /bin/bash "$INSTALLER" --components codex > "$output" 2>&1; then
+        echo "Assertion failed: expected missing bwrap to stop Codex preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.codex"
+    assert_absent "$home/.agents"
+    grep -Fq 'Error: required command is unavailable: bwrap' "$output"
+}
+
+run_claude_directory_target_preflight_test() {
+    local home="$TEST_ROOT/claude-directory-target"
+
+    mkdir -p "$home/.claude/CLAUDE.md"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components claude >/dev/null 2>&1; then
+        echo "Assertion failed: expected Claude directory target to stop preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude/CLAUDE.md/CLAUDE.md"
+    assert_absent "$home/.aws"
+}
+
+run_claude_git_preflight_test() {
+    local home="$TEST_ROOT/claude-without-git"
+    local fake_bin="$TEST_ROOT/no-git-bin"
+
+    mkdir -p "$fake_bin"
+    printf '%s\n' '#!/bin/bash' 'exit 1' > "$fake_bin/git"
+    chmod +x "$fake_bin/git"
+
+    if PATH="$fake_bin:$PATH" HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components claude >/dev/null 2>&1; then
+        echo "Assertion failed: expected unavailable Git to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+}
+
+run_claude_git_config_preflight_test() {
+    local home="$TEST_ROOT/claude-unreadable-git-config"
+
+    mkdir -p "$home/gitconfig"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components claude >/dev/null 2>&1; then
+        echo "Assertion failed: expected unreadable global Git config to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+}
+
+run_claude_readonly_git_config_preflight_test() {
+    local home="$TEST_ROOT/claude-readonly-git-config"
+    local output="$TEST_ROOT/claude-readonly-git-config-output.txt"
+
+    mkdir -p "$home"
+    printf '%s\n' '[core]' 'editor = vim' > "$home/gitconfig"
+    chmod a-w "$home/gitconfig"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected readonly Git config to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    grep -Fq "Error: global Git config is not writable: $home/gitconfig" "$output"
+}
+
+run_claude_unwritable_git_config_parent_preflight_test() {
+    local home="$TEST_ROOT/claude-unwritable-git-config-parent"
+    local config_parent="$home/readonly"
+    local output="$TEST_ROOT/claude-unwritable-git-config-parent-output.txt"
+
+    mkdir -p "$config_parent"
+    chmod a-w "$config_parent"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$config_parent/gitconfig" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected unwritable Git config parent to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    grep -Fq "Error: global Git config parent is not a writable real directory: $config_parent" "$output"
+}
+
+run_claude_existing_git_config_unwritable_parent_preflight_test() {
+    local home="$TEST_ROOT/claude-existing-git-config-unwritable-parent"
+    local config_parent="$home/readonly"
+    local config_path="$config_parent/gitconfig"
+    local output="$TEST_ROOT/claude-existing-git-config-unwritable-parent-output.txt"
+
+    mkdir -p "$config_parent"
+    printf '%s\n' '[core]' 'editor = vim' > "$config_path"
+    chmod a-w "$config_parent"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$config_path" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected existing Git config with unwritable parent to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    grep -Fq "Error: global Git config parent is not a writable real directory: $config_parent" "$output"
+}
+
+run_claude_missing_git_config_parent_preflight_test() {
+    local home="$TEST_ROOT/claude-missing-git-config-parent"
+    local config_parent="$home/missing"
+    local output="$TEST_ROOT/claude-missing-git-config-parent-output.txt"
+
+    mkdir -p "$home"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$config_parent/gitconfig" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected missing Git config parent to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    grep -Fq "Error: global Git config parent is not a writable real directory: $config_parent" "$output"
+}
+
+run_claude_git_config_symlink_preflight_test() {
+    local home="$TEST_ROOT/claude-git-config-symlink"
+    local external_config="$TEST_ROOT/claude-git-config-symlink-external"
+    local config_path="$home/gitconfig"
+    local output="$TEST_ROOT/claude-git-config-symlink-output.txt"
+
+    mkdir -p "$home"
+    printf '%s\n' '[core]' 'editor = vim' > "$external_config"
+    ln -s "$external_config" "$config_path"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$config_path" \
+        bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected Git config symlink to stop Claude preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    assert_symlink "$config_path" "$external_config"
+    grep -Fq "Error: global Git config is not a regular file: $config_path" "$output"
+}
+
+run_kiro_success_test() {
+    local home="$TEST_ROOT/kiro-success"
+
+    mkdir -p "$home"
+
+    HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components kiro
+
+    assert_symlink "$home/.kiro/steering/global/default.md" \
+        "$DOTFILES_DIR/kiro/steering/global/default.md"
+    assert_symlink "$home/.kiro/steering/global/aws-infrastructure.md" \
+        "$DOTFILES_DIR/kiro/steering/global/aws-infrastructure.md"
+    assert_absent "$home/.claude"
+    assert_absent "$home/.codex"
+    assert_absent "$home/.config"
+}
+
+run_kiro_directory_target_preflight_test() {
+    local home="$TEST_ROOT/kiro-directory-target"
+
+    mkdir -p "$home/.kiro/steering/global/default.md"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components kiro >/dev/null 2>&1; then
+        echo "Assertion failed: expected Kiro directory target to stop preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.kiro/steering/global/default.md/default.md"
+    assert_absent "$home/.kiro/steering/global/aws-infrastructure.md"
+}
+
+run_kiro_symlinked_steering_directory_preflight_test() {
+    local home="$TEST_ROOT/kiro-symlinked-directory"
+    local elsewhere="$TEST_ROOT/kiro-symlinked-directory-target"
+
+    mkdir -p "$home/.kiro" "$elsewhere"
+    ln -s "$elsewhere" "$home/.kiro/steering"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components kiro >/dev/null 2>&1; then
+        echo "Assertion failed: expected symlinked steering directory to stop preflight" >&2
+        exit 1
+    fi
+    assert_absent "$elsewhere/global"
+}
+
+run_codex_directory_target_preflight_test() {
+    local home="$TEST_ROOT/codex-directory-target"
+
+    mkdir -p "$home/.codex/AGENTS.md"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components codex >/dev/null 2>&1; then
+        echo "Assertion failed: expected Codex directory target to stop preflight" >&2
+        exit 1
+    fi
+    assert_absent "$home/.codex/AGENTS.md/AGENTS.md"
+    assert_absent "$home/.codex/hooks"
+    assert_absent "$home/.agents"
+}
+
+run_codex_backup_directory_preflight_test() {
+    local home="$TEST_ROOT/codex-backup-directory"
+
+    mkdir -p "$home/.codex/config.toml.bak"
+    printf '%s\n' 'sandbox_mode = "workspace-write"' > "$home/.codex/config.toml"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components codex >/dev/null 2>&1; then
+        echo "Assertion failed: expected Codex backup directory to stop preflight" >&2
+        exit 1
+    fi
+    grep -qx 'sandbox_mode = "workspace-write"' "$home/.codex/config.toml"
+    assert_absent "$home/.codex/AGENTS.md"
+    assert_absent "$home/.codex/hooks"
+    assert_absent "$home/.agents"
+}
+
+run_codex_config_symlink_preflight_test() {
+    local home="$TEST_ROOT/codex-config-symlink"
+    local external_config="$TEST_ROOT/external-config.toml"
+
+    printf '%s\n' 'sandbox_mode = "danger-full-access"' > "$external_config"
+    mkdir -p "$home/.codex"
+    ln -s "$external_config" "$home/.codex/config.toml"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components codex >/dev/null 2>&1; then
+        echo "Assertion failed: expected Codex config symlink to stop preflight" >&2
+        exit 1
+    fi
+    grep -qx 'sandbox_mode = "danger-full-access"' "$external_config"
+    assert_symlink "$home/.codex/config.toml" "$external_config"
+    assert_absent "$home/.codex/AGENTS.md"
+    assert_absent "$home/.agents"
+}
+
+run_selected_component_preflight_test() {
+    local home="$TEST_ROOT/selected-component-preflight"
+
+    mkdir -p "$home/.config/starship.toml"
+
+    if HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components codex,shell >/dev/null 2>&1; then
+        echo "Assertion failed: expected shell directory target to stop all selected components" >&2
+        exit 1
+    fi
+    assert_absent "$home/.codex"
+    assert_absent "$home/.agents"
+}
+
+run_wsl_explicit_core_components_test() {
+    local home="$TEST_ROOT/wsl-explicit-core"
+    local fake_bin="$TEST_ROOT/wsl-explicit-core-fake-bin"
+    local fake_npm_root="$TEST_ROOT/wsl-explicit-core-npm-root"
+
+    mkdir -p "$home" "$fake_bin" "$fake_npm_root/@anthropic-ai/sandbox-runtime"
+    printf '%s\n' '[init]' 'defaultBranch = main' > "$home/.gitconfig"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        "if [ \"\$1\" = \"root\" ] && [ \"\$2\" = \"-g\" ]; then" \
+        "    printf '%s\\n' \"\$FAKE_NPM_ROOT\"" \
+        '    exit 0' \
+        'fi' \
+        'exit 1' > "$fake_bin/npm"
+    printf '%s\n' '#!/bin/bash' 'exit 0' > "$fake_bin/ssh.exe"
+    chmod +x "$fake_bin/npm"
+    chmod +x "$fake_bin/ssh.exe"
+
+    PATH="$fake_bin:$PATH" FAKE_NPM_ROOT="$fake_npm_root" \
+        HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+        env -u GIT_CONFIG_GLOBAL bash "$INSTALLER" --components claude,codex,shell
+
+    test -e "$home/.claude/settings.json"
+    test -d "$home/.aws"
+    assert_symlink "$home/.codex/AGENTS.md" "$DOTFILES_DIR/codex/AGENTS.md"
+    assert_absent "$home/.kiro"
+    assert_symlink "$home/.config/fish/config.fish" "$DOTFILES_DIR/fish/config.fish"
+    test "$(HOME="$home" XDG_CONFIG_HOME="$home/.config" env -u GIT_CONFIG_GLOBAL git config --global --get core.sshCommand)" = ssh.exe
+}
+
+run_wsl_claude_ssh_preflight_test() {
+    local home="$TEST_ROOT/claude-without-ssh-exe"
+    local fake_bin="$TEST_ROOT/claude-without-ssh-exe-bin"
+    local output="$TEST_ROOT/claude-without-ssh-exe-output.txt"
+    local command_name
+
+    mkdir -p "$home" "$fake_bin"
+    for command_name in dirname grep jq; do
+        ln -s "$(command -v "$command_name")" "$fake_bin/$command_name"
+    done
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'case "$1" in' \
+        '    --version|config) exit 0 ;;' \
+        '    *) exit 1 ;;' \
+        'esac' > "$fake_bin/git"
+    chmod +x "$fake_bin/git"
+
+    if PATH="$fake_bin" HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        /bin/bash "$INSTALLER" --components claude > "$output" 2>&1; then
+        echo "Assertion failed: expected missing ssh.exe to stop Claude preflight" >&2
+        exit 1
+    fi
+    grep -Fq 'Error: required command is unavailable: ssh.exe' "$output"
+    assert_absent "$home/.claude"
+    assert_absent "$home/.aws"
+    assert_absent "$home/gitconfig"
+}
+
+run_wsl_rollback_test() {
+    local home="$TEST_ROOT/wsl-rollback"
+    local fake_bin="$TEST_ROOT/fake-bin"
+
+    mkdir -p "$home/.config/fish" "$fake_bin"
+    printf '%s\n' 'echo rollback-fish' > "$home/.config/fish/config.fish"
+    printf '%s\n' 'format = "rollback-starship"' > "$home/.config/starship.toml"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        "for argument in \"\$@\"; do" \
+        "    if [ \"\$argument\" = \"\${FAKE_LN_FAILURE_TARGET:-}\" ]; then exit 1; fi" \
+        'done' \
+        "exec /bin/ln \"\$@\"" > "$fake_bin/ln"
+    chmod +x "$fake_bin/ln"
+
+    if PATH="$fake_bin:$PATH" FAKE_LN_FAILURE_TARGET="$home/.config/starship.toml" \
+        HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components shell >/dev/null 2>&1; then
+        echo "Assertion failed: expected shell link failure" >&2
+        exit 1
+    fi
+
+    test ! -L "$home/.config/fish/config.fish"
+    test ! -L "$home/.config/starship.toml"
+    assert_absent "$home/.config/fish/wsl-abbreviations.fish"
+    grep -qx 'echo rollback-fish' "$home/.config/fish/config.fish"
+    grep -qx 'format = "rollback-starship"' "$home/.config/starship.toml"
+}
+
+run_wsl_rollback_failure_test() {
+    local home="$TEST_ROOT/wsl-rollback-failure"
+    local fake_bin="$TEST_ROOT/rollback-failure-bin"
+    local output="$TEST_ROOT/rollback-failure-output.txt"
+    local backup_dir
+
+    mkdir -p "$home/.config/fish" "$fake_bin"
+    printf '%s\n' 'echo rollback-failure-fish' > "$home/.config/fish/config.fish"
+    printf '%s\n' 'format = "rollback-failure-starship"' > "$home/.config/starship.toml"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        "for argument in \"\$@\"; do" \
+        "    if [ \"\$argument\" = \"\${FAKE_LN_FAILURE_TARGET:-}\" ]; then exit 1; fi" \
+        'done' \
+        "exec $(command -v ln) \"\$@\"" > "$fake_bin/ln"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        "if [ \"\$1\" = \"\${FAKE_UNLINK_FAILURE_TARGET:-}\" ]; then exit 1; fi" \
+        "exec $(command -v unlink) \"\$@\"" > "$fake_bin/unlink"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        "if [ \"\$2\" = \"\${FAKE_MV_FAILURE_TARGET:-}\" ]; then exit 1; fi" \
+        "exec $(command -v mv) \"\$@\"" > "$fake_bin/mv"
+    chmod +x "$fake_bin/ln" "$fake_bin/unlink" "$fake_bin/mv"
+
+    if PATH="$fake_bin:$PATH" \
+        FAKE_LN_FAILURE_TARGET="$home/.config/starship.toml" \
+        FAKE_UNLINK_FAILURE_TARGET="$home/.config/fish/config.fish" \
+        FAKE_MV_FAILURE_TARGET="$home/.config/fish/config.fish" \
+        HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components shell > "$output" 2>&1; then
+        echo "Assertion failed: expected incomplete shell rollback" >&2
+        exit 1
+    fi
+
+    assert_symlink "$home/.config/fish/config.fish" "$DOTFILES_DIR/fish/config.fish"
+    grep -qx 'format = "rollback-failure-starship"' "$home/.config/starship.toml"
+    backup_dir=$(find "$home/.dotfiles-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)
+    test -n "$backup_dir"
+    grep -qx 'echo rollback-failure-fish' "$backup_dir/fish/config.fish"
+    grep -Fq 'Error: shell rollback did not complete.' "$output"
+    grep -Fq "$backup_dir/fish/config.fish -> $home/.config/fish/config.fish" "$output"
+}
+
+run_wsl_signal_after_backup_test() {
+    local home="$TEST_ROOT/wsl-signal-after-backup"
+    local fake_bin="$TEST_ROOT/signal-after-backup-bin"
+    local output="$TEST_ROOT/signal-after-backup-output.txt"
+    local backup_dir
+
+    mkdir -p "$home/.config/fish" "$fake_bin"
+    printf '%s\n' 'echo signal-fish' > "$home/.config/fish/config.fish"
+    printf '%s\n' 'format = "signal-starship"' > "$home/.config/starship.toml"
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'if [ "$1" = "${FAKE_MV_SIGNAL_TARGET:-}" ]; then' \
+        "    $(command -v mv) \"\\$@\"" \
+        '    kill -TERM "$PPID"' \
+        '    exit 0' \
+        'fi' \
+        "exec $(command -v mv) \"\\$@\"" > "$fake_bin/mv"
+    chmod +x "$fake_bin/mv"
+
+    if PATH="$fake_bin:$PATH" \
+        FAKE_MV_SIGNAL_TARGET="$home/.config/fish/config.fish" \
+        HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components shell > "$output" 2>&1; then
+        echo "Assertion failed: expected signal to interrupt shell install" >&2
+        exit 1
+    fi
+
+    test ! -L "$home/.config/fish/config.fish"
+    grep -qx 'echo signal-fish' "$home/.config/fish/config.fish"
+    grep -qx 'format = "signal-starship"' "$home/.config/starship.toml"
+    assert_absent "$home/.config/fish/wsl-abbreviations.fish"
+    backup_dir=$(find "$home/.dotfiles-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)
+    test -n "$backup_dir"
+    assert_absent "$backup_dir/fish/config.fish"
+    grep -Fq 'shell install failed; restoring previous targets' "$output"
+}
+
+run_macos_explicit_core_components_test() {
+    local home="$TEST_ROOT/macos-explicit-core"
+    local backup_dir
+
+    mkdir -p "$home/.config/fish" "$home/.config/ghostty"
+    printf '%s\n' 'echo original-fish' > "$home/.config/fish/config.fish"
+    printf '%s\n' 'format = "original-starship"' > "$home/.config/starship.toml"
+    printf '%s\n' 'format = "original-terminal-starship"' > "$home/.config/starship-terminal.toml"
+    printf '%s\n' 'font-family = "original"' > "$home/.config/ghostty/config"
+
+    HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components claude,codex,shell
+
+    test -e "$home/.claude/settings.json"
+    test -d "$home/.aws"
+    assert_symlink "$home/.codex/AGENTS.md" "$DOTFILES_DIR/codex/AGENTS.md"
+    assert_absent "$home/.kiro"
+    assert_symlink "$home/.config/fish/config.fish" "$DOTFILES_DIR/fish/config.fish"
+    assert_symlink "$home/.config/starship.toml" "$DOTFILES_DIR/starship/starship.toml"
+    assert_symlink "$home/.config/starship-terminal.toml" "$DOTFILES_DIR/starship/starship-terminal.toml"
+    assert_symlink "$home/.config/ghostty/config" "$DOTFILES_DIR/ghostty/config"
+    backup_dir=$(find "$home/.dotfiles-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)
+    test -n "$backup_dir"
+    grep -qx 'font-family = "original"' "$backup_dir/ghostty/config"
+}
+
+run_help_test
+run_parser_tests
+run_missing_jq_preflight_test
+run_codex_preflight_test
+run_codex_reviewer_migration_test
+run_codex_unmanaged_reviewer_symlink_test
+run_codex_reviewer_migration_failure_test
+run_claude_directory_target_preflight_test
+run_codex_directory_target_preflight_test
+run_codex_backup_directory_preflight_test
+run_codex_config_symlink_preflight_test
+run_kiro_success_test
+run_kiro_directory_target_preflight_test
+run_kiro_symlinked_steering_directory_preflight_test
+run_selected_component_preflight_test
+
+case "$(uname -s)" in
+    Darwin)
+        run_macos_explicit_core_components_test
+        ;;
+    Linux)
+        if grep -qi microsoft /proc/version 2>/dev/null; then
+            run_codex_bwrap_preflight_test
+            run_claude_git_preflight_test
+            run_claude_git_config_preflight_test
+            run_claude_readonly_git_config_preflight_test
+            run_claude_unwritable_git_config_parent_preflight_test
+            run_claude_existing_git_config_unwritable_parent_preflight_test
+            run_claude_missing_git_config_parent_preflight_test
+            run_claude_git_config_symlink_preflight_test
+            run_wsl_explicit_core_components_test
+            run_wsl_claude_ssh_preflight_test
+            run_wsl_success_test
+            run_wsl_rollback_test
+            run_wsl_rollback_failure_test
+            run_wsl_signal_after_backup_test
+        else
+            echo "Error: WSL integration tests require a WSL runner" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Error: unsupported test platform: $(uname -s)" >&2
+        exit 1
+        ;;
+esac
+
+echo "install component integration tests passed"
+echo "TEST_ROOT is retained for inspection: $TEST_ROOT"

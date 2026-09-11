@@ -1,0 +1,2 @@
+# Optional: cmux requires macOS 14 or later.
+cask "cmux"

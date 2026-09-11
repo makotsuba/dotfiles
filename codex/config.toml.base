@@ -1,0 +1,16 @@
+# on-request: pause for approval only when Codex requests elevated permissions
+# suggest: pause before every shell command (closest to Claude Code's "ask" list)
+# Change to "suggest" if you want explicit confirmation for git commit/push
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+[features]
+hooks = true
+memories = true
+
+[tui]
+status_line = ["model-with-reasoning", "context-used", "current-dir", "git-branch", "five-hour-limit", "weekly-limit"]
+# Notify when approval is needed (equivalent to Claude Code's Notification/permission_prompt)
+notifications = ["approval-requested"]
+# osc9: Windows Terminal picks up OSC 9 sequences and shows a notification (works on WSL)
+notification_method = "osc9"

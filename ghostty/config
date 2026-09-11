@@ -1,0 +1,6 @@
+# cmux reads terminal rendering and shell settings from this Ghostty config.
+font-family = "PlemolJP Console NF"
+font-size = 15
+theme = "Catppuccin Macchiato"
+command = /opt/homebrew/bin/fish
+shell-integration = fish

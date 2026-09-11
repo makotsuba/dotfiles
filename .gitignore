@@ -1,0 +1,26 @@
+# Claude Code - runtime data
+.codex
+claude/projects/
+claude/history.jsonl
+claude/cache/
+claude/paste-cache/
+claude/shell-snapshots/
+claude/todos/
+claude/plans/
+claude/backups/
+claude/debug/
+claude/telemetry/
+claude/file-history/
+claude/plugins/
+claude/session-env
+tasks/
+/.DS_Store
+
+# Local shell state and credentials must never be committed.
+.env*
+**/.env*
+**/.direnv/
+fish/fish_history
+fish/fish_variables
+.aws/
+.ssh/
