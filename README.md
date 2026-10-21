@@ -290,11 +290,13 @@ bash scripts/test-linux-notifications.sh
 
 ### Linux verification
 
-The installer and focused tests were verified on Debian 13 and Ubuntu 24.04 arm64 virtual machines, as well as the macOS integration suite. The Linux notification suite uses a mock command and does not send real desktop notifications. Other Linux versions and architectures have not been verified. WSL-specific tests remain in the suite, but were not rerun for this change.
+The installer and focused tests were verified on Debian 13 and Ubuntu 24.04 arm64 virtual machines, as well as the macOS integration suite. On 2026-10-21, Codex Cloud validation of commit `9338ea3` also passed on Debian 13.6 x86_64: component integration, security hooks, statusline, and Linux notification mocks. Missing dependencies were extracted into a validation-only directory and supplied through command-local `PATH` and `LD_LIBRARY_PATH`; no system installation or default-home installer run was performed. Other Linux versions and architectures have not been verified. WSL-specific tests remain in the suite, but were not rerun for this change.
 
 A separate `bwrap` smoke test confirmed read-only filesystem and network-namespace isolation on both Linux VMs. Ubuntu 24.04 required the official `bwrap-userns-restrict` AppArmor profile before that smoke test passed; the installer did not apply the profile.
 
-Installer tests confirm configuration deployment, not a live Claude Code, Codex, or Kiro session. Verify actual client sandbox behavior and desktop delivery separately in the target runtime. Cloud containers may restrict user namespaces even when the same distribution works in a VM.
+In Codex Cloud, both user-namespace and network-namespace `bwrap` probes exited 1 with `bwrap: setting up uid map: Read-only file system`. Actual Cloud sandbox execution and filesystem/network isolation remain unverified. No namespace, mount, kernel, AppArmor, or other security controls were changed to bypass this restriction.
+
+The Linux notification suite uses a mock command and does not send real desktop notifications. Installed notification hooks also completed quietly in the Cloud headless environment. Installer tests confirm configuration deployment, not live authenticated Claude Code, Codex, or Kiro hook dispatch, real desktop delivery, or WSL/Windows interoperability. Verify those separately in the target runtime.
 
 ## Installed Paths
 
