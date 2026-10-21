@@ -26,7 +26,7 @@ usage() {
 Usage: bash install.sh --components <component>[,<component>...]
 
 Components:
-  claude  Install Claude Code settings and WSL sandbox integration.
+  claude  Install Claude Code settings and platform-specific sandbox integration.
   codex   Install Codex settings, skills, and hooks.
   kiro    Install Kiro CLI global steering files. Opt-in only.
   shell   Install fish and Starship settings for the detected OS.
@@ -275,13 +275,17 @@ resolve_python3() {
 
 # OS detection
 detect_os() {
-    if grep -qi microsoft /proc/version 2>/dev/null; then
-        echo "wsl"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        echo "mac"
-    else
-        echo "linux"
-    fi
+    case "${OSTYPE:-}" in
+        darwin*) echo "mac" ;;
+        linux*)
+            if grep -qi microsoft /proc/version 2>/dev/null; then
+                echo "wsl"
+            else
+                echo "linux"
+            fi
+            ;;
+        *) echo "unknown" ;;
+    esac
 }
 
 force_link() {
@@ -318,7 +322,7 @@ preflight_claude_component() {
     local settings_source
 
     case "$OS" in
-        wsl|mac)
+        wsl|mac|linux)
             ;;
         *)
             fail "Claude Code is unsupported on detected OS: $OS"
@@ -392,9 +396,13 @@ preflight_claude_component() {
             return 1
         fi
     else
-        hook_glob="$DOTFILES_DIR/claude/hooks/mac/"
-        settings_source="$DOTFILES_DIR/claude/settings/mac.json"
+        hook_glob="$DOTFILES_DIR/claude/hooks/$OS/"
+        settings_source="$DOTFILES_DIR/claude/settings/$OS.json"
         require_source_file "$settings_source" || return 1
+        if [ "$OS" = "linux" ]; then
+            require_command bwrap || return 1
+            require_command socat || return 1
+        fi
     fi
 
     shopt -s nullglob
@@ -432,9 +440,9 @@ install_claude_component() {
             hook_glob="$DOTFILES_DIR/claude/hooks/wsl/"
             settings_source="$DOTFILES_DIR/claude/settings/wsl.json"
             ;;
-        mac)
-            hook_glob="$DOTFILES_DIR/claude/hooks/mac/"
-            settings_source="$DOTFILES_DIR/claude/settings/mac.json"
+        mac|linux)
+            hook_glob="$DOTFILES_DIR/claude/hooks/$OS/"
+            settings_source="$DOTFILES_DIR/claude/settings/$OS.json"
             ;;
     esac
 
@@ -708,7 +716,7 @@ preflight_codex_component() {
     local hook
 
     case "$OS" in
-        wsl|mac)
+        wsl|mac|linux)
             ;;
         *)
             fail "Codex is unsupported on detected OS: $OS"
@@ -718,7 +726,7 @@ preflight_codex_component() {
 
     require_command jq || return 1
 
-    if [ "$OS" = "wsl" ]; then
+    if [ "$OS" = "wsl" ] || [ "$OS" = "linux" ]; then
         require_command bwrap || return 1
     fi
 
@@ -805,6 +813,20 @@ install_codex_component() {
 
 configure_shell_component() {
     case "$OS" in
+        linux)
+            SHELL_SOURCES=(
+                "$DOTFILES_DIR/fish/config.fish"
+                "$DOTFILES_DIR/starship/starship.toml"
+            )
+            SHELL_TARGETS=(
+                "$HOME/.config/fish/config.fish"
+                "$HOME/.config/starship.toml"
+            )
+            SHELL_BACKUP_NAMES=(
+                "fish/config.fish"
+                "starship/starship.toml"
+            )
+            ;;
         wsl)
             SHELL_SOURCES=(
                 "$DOTFILES_DIR/fish/config.fish"
@@ -1057,6 +1079,11 @@ main() {
     parse_components "$@" || exit 1
     OS=$(detect_os)
     echo "Detected OS: $OS"
+
+    if [ "$OS" = "unknown" ]; then
+        fail "unsupported operating system: ${OSTYPE:-unknown}"
+        exit 1
+    fi
 
     preflight_selected_components || exit 1
 

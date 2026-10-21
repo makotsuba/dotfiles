@@ -111,8 +111,8 @@ run_missing_jq_preflight_test() {
     done
 }
 
-run_wsl_success_test() {
-    local home="$TEST_ROOT/wsl-success"
+run_shell_success_test() {
+    local home="$TEST_ROOT/shell-success"
     local backup_dir
 
     mkdir -p "$home/.config/fish"
@@ -125,7 +125,11 @@ run_wsl_success_test() {
     assert_absent "$home/.aws"
     assert_absent "$home/gitconfig"
     assert_symlink "$home/.config/fish/config.fish" "$DOTFILES_DIR/fish/config.fish"
-    assert_symlink "$home/.config/fish/wsl-abbreviations.fish" "$DOTFILES_DIR/fish/wsl-abbreviations.fish"
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        assert_symlink "$home/.config/fish/wsl-abbreviations.fish" "$DOTFILES_DIR/fish/wsl-abbreviations.fish"
+    else
+        assert_absent "$home/.config/fish/wsl-abbreviations.fish"
+    fi
     assert_symlink "$home/.config/starship.toml" "$DOTFILES_DIR/starship/starship.toml"
     assert_symlink "$home/.codex/AGENTS.md" "$DOTFILES_DIR/codex/AGENTS.md"
     assert_symlink "$home/.agents/skills/fix-issue" "$DOTFILES_DIR/codex/skills/fix-issue"
@@ -533,8 +537,8 @@ run_wsl_claude_ssh_preflight_test() {
     assert_absent "$home/gitconfig"
 }
 
-run_wsl_rollback_test() {
-    local home="$TEST_ROOT/wsl-rollback"
+run_shell_rollback_test() {
+    local home="$TEST_ROOT/shell-rollback"
     local fake_bin="$TEST_ROOT/fake-bin"
 
     mkdir -p "$home/.config/fish" "$fake_bin"
@@ -562,8 +566,8 @@ run_wsl_rollback_test() {
     grep -qx 'format = "rollback-starship"' "$home/.config/starship.toml"
 }
 
-run_wsl_rollback_failure_test() {
-    local home="$TEST_ROOT/wsl-rollback-failure"
+run_shell_rollback_failure_test() {
+    local home="$TEST_ROOT/shell-rollback-failure"
     local fake_bin="$TEST_ROOT/rollback-failure-bin"
     local output="$TEST_ROOT/rollback-failure-output.txt"
     local backup_dir
@@ -606,8 +610,8 @@ run_wsl_rollback_failure_test() {
     grep -Fq "$backup_dir/fish/config.fish -> $home/.config/fish/config.fish" "$output"
 }
 
-run_wsl_signal_after_backup_test() {
-    local home="$TEST_ROOT/wsl-signal-after-backup"
+run_shell_signal_after_backup_test() {
+    local home="$TEST_ROOT/shell-signal-after-backup"
     local fake_bin="$TEST_ROOT/signal-after-backup-bin"
     local output="$TEST_ROOT/signal-after-backup-output.txt"
     local backup_dir
@@ -618,11 +622,11 @@ run_wsl_signal_after_backup_test() {
     printf '%s\n' \
         '#!/bin/bash' \
         'if [ "$1" = "${FAKE_MV_SIGNAL_TARGET:-}" ]; then' \
-        "    $(command -v mv) \"\\$@\"" \
+        "    $(command -v mv) \"\$@\"" \
         '    kill -TERM "$PPID"' \
         '    exit 0' \
         'fi' \
-        "exec $(command -v mv) \"\\$@\"" > "$fake_bin/mv"
+        "exec $(command -v mv) \"\$@\"" > "$fake_bin/mv"
     chmod +x "$fake_bin/mv"
 
     if PATH="$fake_bin:$PATH" \
@@ -669,8 +673,123 @@ run_macos_explicit_core_components_test() {
     grep -qx 'font-family = "original"' "$backup_dir/ghostty/config"
 }
 
+run_unknown_os_test() {
+    local home="$TEST_ROOT/unknown-os"
+    local output="$TEST_ROOT/unknown-os-output.txt"
+
+    mkdir -p "$home"
+    if OSTYPE=freebsd HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+        bash "$INSTALLER" --components claude,codex,kiro,shell > "$output" 2>&1; then
+        echo "Assertion failed: expected unknown OS to stop before installation" >&2
+        exit 1
+    fi
+    grep -Fq 'Error: unsupported operating system: freebsd' "$output"
+    assert_absent "$home/.claude"
+    assert_absent "$home/.codex"
+    assert_absent "$home/.kiro"
+    assert_absent "$home/.config"
+    assert_absent "$home/.aws"
+    assert_absent "$home/gitconfig"
+}
+
+run_linux_sandbox_preflight_tests() {
+    local component
+    local missing
+    local home
+    local fake_bin
+    local output
+    local command_name
+
+    for component in claude codex; do
+        for missing in bwrap socat; do
+            if [ "$component" = codex ] && [ "$missing" = socat ]; then
+                continue
+            fi
+            home="$TEST_ROOT/linux-$component-without-$missing"
+            fake_bin="$TEST_ROOT/linux-$component-without-$missing-bin"
+            output="$TEST_ROOT/linux-$component-without-$missing-output.txt"
+            mkdir -p "$home" "$fake_bin"
+            for command_name in dirname grep jq bwrap socat; do
+                if [ "$command_name" != "$missing" ]; then
+                    ln -s "$(command -v "$command_name")" "$fake_bin/$command_name"
+                fi
+            done
+            if PATH="$fake_bin" HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+                /bin/bash "$INSTALLER" --components "$component" > "$output" 2>&1; then
+                echo "Assertion failed: expected missing $missing to stop $component" >&2
+                exit 1
+            fi
+            grep -Fq "Error: required command is unavailable: $missing" "$output"
+            assert_absent "$home/.claude"
+            assert_absent "$home/.codex"
+            assert_absent "$home/.aws"
+        done
+    done
+}
+
+run_linux_all_components_test() {
+    local home="$TEST_ROOT/linux-all"
+    local config_before="$TEST_ROOT/linux-gitconfig-before"
+    local codex_before="$TEST_ROOT/linux-codex-before"
+    local attempt
+    local hook
+
+    mkdir -p "$home/.codex"
+    printf '%s\n' '[core]' 'sshCommand = ssh -o BatchMode=yes' 'editor = vim' > "$home/gitconfig"
+    cp "$home/gitconfig" "$config_before"
+    printf '%s\n' 'model = "preserved-model"' > "$home/.codex/config.toml"
+    cp "$home/.codex/config.toml" "$codex_before"
+
+    for attempt in 1 2; do
+        HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" \
+            bash "$INSTALLER" --components claude,codex,kiro,shell
+        cmp "$config_before" "$home/gitconfig"
+        assert_symlink "$home/.claude/hooks/notify-stop.sh" "$DOTFILES_DIR/claude/hooks/linux/notify-stop.sh"
+        assert_symlink "$home/.codex/hooks/notify-stop.sh" "$DOTFILES_DIR/codex/hooks/linux/notify-stop.sh"
+        assert_symlink "$home/.kiro/steering/global/default.md" "$DOTFILES_DIR/kiro/steering/global/default.md"
+        assert_symlink "$home/.config/fish/config.fish" "$DOTFILES_DIR/fish/config.fish"
+        assert_symlink "$home/.config/starship.toml" "$DOTFILES_DIR/starship/starship.toml"
+        assert_absent "$home/.config/fish/wsl-abbreviations.fish"
+        assert_absent "$home/.config/starship-terminal.toml"
+        assert_absent "$home/.config/ghostty"
+        grep -qx 'model = "preserved-model"' "$home/.codex/config.toml"
+        grep -qx 'sandbox_mode = "workspace-write"' "$home/.codex/config.toml"
+        jq -e '.sandbox.enabled == true and .sandbox.failIfUnavailable == true and
+            .sandbox.allowUnsandboxedCommands == false and
+            (.sandbox.excludedCommands | index("ssh.exe") | not)' "$home/.claude/settings.json" >/dev/null
+        while IFS= read -r hook; do
+            test -x "$hook"
+        done < <(jq -r '.hooks[][] | .hooks[].command' "$home/.claude/settings.json" "$home/.codex/hooks.json")
+        if [ "$attempt" = 1 ]; then
+            cmp "$codex_before" "$home/.codex/config.toml.bak"
+        fi
+    done
+}
+
+run_linux_component_selection_tests() {
+    local component
+    local home
+    local other
+
+    for component in claude codex kiro shell; do
+        home="$TEST_ROOT/linux-only-$component"
+        mkdir -p "$home"
+        HOME="$home" GIT_CONFIG_GLOBAL="$home/gitconfig" bash "$INSTALLER" --components "$component"
+        assert_absent "$home/gitconfig"
+        for other in claude codex kiro; do
+            if [ "$component" != "$other" ]; then
+                assert_absent "$home/.$other"
+            fi
+        done
+        if [ "$component" != shell ]; then
+            assert_absent "$home/.config"
+        fi
+    done
+}
+
 run_help_test
 run_parser_tests
+run_unknown_os_test
 run_missing_jq_preflight_test
 run_codex_preflight_test
 run_codex_reviewer_migration_test
@@ -684,6 +803,9 @@ run_kiro_success_test
 run_kiro_directory_target_preflight_test
 run_kiro_symlinked_steering_directory_preflight_test
 run_selected_component_preflight_test
+run_shell_rollback_test
+run_shell_rollback_failure_test
+run_shell_signal_after_backup_test
 
 case "$(uname -s)" in
     Darwin)
@@ -701,13 +823,12 @@ case "$(uname -s)" in
             run_claude_git_config_symlink_preflight_test
             run_wsl_explicit_core_components_test
             run_wsl_claude_ssh_preflight_test
-            run_wsl_success_test
-            run_wsl_rollback_test
-            run_wsl_rollback_failure_test
-            run_wsl_signal_after_backup_test
+            run_shell_success_test
         else
-            echo "Error: WSL integration tests require a WSL runner" >&2
-            exit 1
+            run_linux_sandbox_preflight_tests
+            run_linux_all_components_test
+            run_linux_component_selection_tests
+            run_shell_success_test
         fi
         ;;
     *)
