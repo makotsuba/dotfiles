@@ -74,7 +74,7 @@ brew bundle check --no-upgrade --file ~/src/dotfiles/Brewfile
 brew bundle install --no-upgrade --file ~/src/dotfiles/Brewfile
 ```
 
-`--no-upgrade` prevents the Bundle from proactively running `brew upgrade` for outdated dependencies. A required `brew install` may still update dependencies. The core Bundle includes the Homebrew Python used when merging Codex configuration.
+`--no-upgrade` prevents the Bundle from proactively running `brew upgrade` for outdated dependencies. A required `brew install` may still update dependencies. The core Bundle includes the Homebrew Python used when merging Codex configuration and `uv` for project and skill environments. Homebrew Python remains the bootstrap runtime; `uv` may reuse it when it satisfies a project's requirements.
 
 #### cmux
 
