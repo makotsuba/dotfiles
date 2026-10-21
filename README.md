@@ -10,7 +10,7 @@ These are opinionated settings maintained for the repository owner. Review the c
 | --- | --- |
 | macOS (Apple Silicon) | Supported |
 | WSL 2 (Ubuntu/Debian) | Supported |
-| Linux (native) | Installer supports only the Kiro component; the full integration suite exits non-zero |
+| Linux (native Debian/Ubuntu) | Supported for all components; desktop notifications are optional. See [Linux verification](#linux-verification) for tested versions and architectures |
 
 ## Quick Start
 
@@ -35,7 +35,7 @@ Kiro steering is opt-in and can be installed independently:
 bash install.sh --components kiro
 ```
 
-On WSL 2, complete the [WSL prerequisites](#wsl-2-windows) before selecting the required components.
+On WSL 2 or native Linux, complete the [WSL prerequisites](#wsl-2-windows) or [Linux prerequisites](#native-linux-debianubuntu) before selecting the required components.
 
 ## Components
 
@@ -52,10 +52,10 @@ bash install.sh --components kiro
 bash install.sh --components claude,codex,kiro,shell
 ```
 
-| Component | Managed scope | Additional WSL requirements or effects |
+| Component | Managed scope | Additional Linux/WSL requirements or effects |
 | --- | --- | --- |
-| `claude` | `~/.claude/`; validates or creates the `~/.aws/` directory without managing its contents | Requires `bwrap`, `socat`, `ssh.exe`, and `@anthropic-ai/sandbox-runtime`; sets `core.sshCommand = ssh.exe` |
-| `codex` | `~/.codex/`, `~/.agents/skills/`, Codex hooks and merged configuration | Requires `bwrap` on WSL; validates Python and the existing `config.toml` structure on every supported OS |
+| `claude` | `~/.claude/`; validates or creates the `~/.aws/` directory without managing its contents | Linux/WSL require `bwrap` and `socat`. WSL additionally requires `ssh.exe` and `@anthropic-ai/sandbox-runtime`, and sets `core.sshCommand = ssh.exe`. Native Linux leaves global Git configuration unchanged |
+| `codex` | `~/.codex/`, `~/.agents/skills/`, Codex hooks and merged configuration | Requires `bwrap` on Linux/WSL; validates Python and the existing `config.toml` structure on every supported OS |
 | `kiro` | Global steering files under `~/.kiro/steering/global/` | No additional requirement; applied only when explicitly selected |
 | `shell` | fish and Starship configuration | Requires fish and Starship; backs up managed targets before replacing them with symlinks |
 
@@ -192,6 +192,35 @@ The WSL shell component manages:
 
 Set a Nerd Font such as `PlemolJP Console NF` in the host-side Windows Terminal profile. The installer does not change Windows Terminal or PowerShell settings, the default shell, or installed packages.
 
+### Native Linux (Debian/Ubuntu)
+
+All four components can be installed on native Linux, including headless servers and cloud development environments. The installer manages configuration files; it does not install Claude Code, Codex, Kiro CLI, packages, or the login shell.
+
+#### Linux dependencies
+
+Arrange installation of the packages required by the selected components before running the installer:
+
+| Component | Prerequisites |
+| --- | --- |
+| `claude` | Bash, `jq`, `bubblewrap` (`bwrap`), `socat` |
+| `codex` | Bash, `jq`, `bubblewrap`, Python 3.11+ or Python with `tomli` |
+| `kiro` | Bash and standard file utilities |
+| `shell` | fish and Starship |
+
+Debian/Ubuntu package names include `jq`, `bubblewrap`, `socat`, `python3`, `python3-tomli`, `fish`, and `git`. Install Starship separately if the distribution does not package it. The optional `@anthropic-ai/sandbox-runtime` package supplies Claude Code's additional seccomp filter; native Linux installation does not require the global npm package.
+
+Linux sandboxing also depends on usable user namespaces and the host's security policy. A `bwrap` executable being present does not prove that a cloud container permits sandbox creation. Follow the [OpenAI sandbox guidance](https://learn.chatgpt.com/docs/sandboxing) and [Claude Code Linux setup](https://code.claude.com/docs/en/sandboxing#set-up-linux-and-wsl2), including the AppArmor profile requirements on Ubuntu 24.04 where applicable. The installer does not change kernel or AppArmor settings. The Linux Claude configuration enables `sandbox.failIfUnavailable` and disables unsandboxed retries, so an unavailable sandbox stops client startup rather than silently weakening isolation. The explicit `docker` exclusion remains as in the macOS configuration.
+
+#### Linux installation and notifications
+
+```bash
+bash install.sh --components claude,codex,kiro,shell
+```
+
+Linux shell installation manages only `~/.config/fish/config.fish` and `~/.config/starship.toml`. It leaves native Git SSH configuration unchanged and does not install WSL abbreviations or macOS terminal settings.
+
+Desktop notifications optionally use `notify-send` from `libnotify-bin`. The hooks send only when `DISPLAY` or `WAYLAND_DISPLAY`, a session `DBUS_SESSION_BUS_ADDRESS`, and `notify-send` are available. Missing desktop services, missing notification tools, and delivery failures are silently ignored. A successful hook exit in a cloud or headless session means the hook completed; it does not confirm delivery. Security hooks remain active in headless sessions.
+
 ## Updating
 
 On macOS, satisfy the core Bundle before rerunning the installer:
@@ -202,7 +231,7 @@ brew bundle install --no-upgrade --file ~/src/dotfiles/Brewfile
 bash install.sh --components claude,codex,shell
 ```
 
-On WSL, recheck the prerequisites for the components being updated, then select the required combination explicitly:
+On WSL or native Linux, recheck the prerequisites for the components being updated, then select the required combination explicitly:
 
 ```bash
 # Claude, Codex, and shell
@@ -244,7 +273,7 @@ This repository does not manage fish history or variables, completion caches, `.
 
 ## Verification
 
-Run the full component integration suite on macOS or WSL with an explicitly created empty test root. The suite intentionally retains that directory for inspection. On native Linux, the script runs the platform-neutral checks, including the Kiro install and preflight tests, then exits non-zero because the remaining integration tests require WSL.
+Run the full component integration suite on macOS, WSL, or native Linux with an explicitly created empty test root. The suite intentionally retains that directory for inspection. Native Linux runs the common checks and Linux-specific installation, component selection, reinstallation, dependency, configuration-preservation, and shell rollback tests, then exits zero on success. macOS and WSL run their own platform-specific cases.
 
 ```bash
 TEST_ROOT=$(mktemp -d /tmp/dotfiles-install-test.XXXXXX)
@@ -256,7 +285,18 @@ Run the focused hook and status-line tests separately:
 ```bash
 bash scripts/test-security-hooks.sh
 bash scripts/test-statusline.sh
+bash scripts/test-linux-notifications.sh
 ```
+
+### Linux verification
+
+The installer and focused tests were verified on Debian 13 and Ubuntu 24.04 arm64 virtual machines, as well as the macOS integration suite. On 2026-10-21, Codex Cloud validation of commit `9338ea3` also passed on Debian 13.6 x86_64: component integration, security hooks, statusline, and Linux notification mocks. Missing dependencies were extracted into a validation-only directory and supplied through command-local `PATH` and `LD_LIBRARY_PATH`; no system installation or default-home installer run was performed. Other Linux versions and architectures have not been verified. WSL-specific tests remain in the suite, but were not rerun for this change.
+
+A separate `bwrap` smoke test confirmed read-only filesystem and network-namespace isolation on both Linux VMs. Ubuntu 24.04 required the official `bwrap-userns-restrict` AppArmor profile before that smoke test passed; the installer did not apply the profile.
+
+In Codex Cloud, both user-namespace and network-namespace `bwrap` probes exited 1 with `bwrap: setting up uid map: Read-only file system`. Actual Cloud sandbox execution and filesystem/network isolation remain unverified. No namespace, mount, kernel, AppArmor, or other security controls were changed to bypass this restriction.
+
+The Linux notification suite uses a mock command and does not send real desktop notifications. Installed notification hooks also completed quietly in the Cloud headless environment. Installer tests confirm configuration deployment, not live authenticated Claude Code, Codex, or Kiro hook dispatch, real desktop delivery, or WSL/Windows interoperability. Verify those separately in the target runtime.
 
 ## Installed Paths
 
@@ -298,6 +338,11 @@ bash scripts/test-statusline.sh
 - `~/.config/fish/wsl-abbreviations.fish`
 - `~/.config/starship.toml`
 
+#### Linux Paths
+
+- `~/.config/fish/config.fish`
+- `~/.config/starship.toml`
+
 ## Codex Notes
 
 - The `researcher` subagent is defined in `codex/agents/researcher.toml`. Pull request reviews are delegated to the built-in `review-agent` skill.
@@ -307,7 +352,7 @@ bash scripts/test-statusline.sh
 - Codex stores memories in `~/.codex/memories/`. This is runtime data generated and updated by Codex and is not managed by the installer.
 - Merging an existing `~/.codex/config.toml` requires Python's `tomllib`. Install `tomli` when using Python earlier than 3.11.
 - If the existing `~/.codex/config.toml` contains an unsupported structure, such as an array of tables, the installer stops with an explicit error instead of rewriting it silently.
-- Both WSL and macOS configure a task-completion notification hook. The Claude Code idle notification has not been ported to Codex.
+- Linux, WSL, and macOS configure a task-completion notification hook. Linux desktop delivery is optional. The Claude Code idle notification has not been ported to Codex.
 
 ## Kiro Notes
 
