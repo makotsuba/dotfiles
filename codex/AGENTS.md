@@ -55,8 +55,9 @@
 ## Security
 
 - Never read, write, or modify `.env`, `.envrc`, or `.env.*` files
+- When using existing API credentials, review how the command uses them, verify the effective destination, and limit access to the operation that needs them. Do not display, log, or save credentials in plaintext. If the expected credential is unavailable, report the cause. Create or substitute a credential only if explicitly authorized for the task.
 - For a requested local OpenAI API call, use the existing 1Password reference if the project does not specify its own credentials. Read the single-line reference from `openai-key-ref` in `CODEX_HOME` (default: `~/.codex`). Keep the reference file local and outside Git.
-- Verify the code and its effective destination before using `op run` to pass `OPENAI_API_KEY` only to the target process. Use this key only for requests to `https://api.openai.com` and never display or persist the key itself. If the reference or 1Password authentication is unavailable, report the cause without creating or substituting a key.
+- When using this reference, pass `OPENAI_API_KEY` only to the target process with `op run`. Use this key only for requests to `https://api.openai.com`. If the reference or 1Password authentication is unavailable, stop the call.
 - Never run `rm -rf` or destructive delete commands
 - Never run `git push --force` or `git reset --hard` without explicit user confirmation
 - Never run `sudo` or `su`
