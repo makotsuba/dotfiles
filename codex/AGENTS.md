@@ -63,11 +63,12 @@
 
 ## Language
 
-Always respond in Japanese. Use Japanese for all explanations, comments, and communications.
+Respond to the user in Japanese by default. Use Japanese for explanations, code comments, docstrings, and communications unless the user requests another language. Commit messages and pull requests follow the repository conventions below.
 Technical terms and code identifiers remain in their original form.
 
 ## Migrated Shared Conventions
 
-- When creating a Git commit, use Conventional Commits format; keep Japanese subject lines under 72 characters.
+- Write commit subjects and bodies, and pull request titles and descriptions, in the language established by the repository. Check its contribution guidelines and relevant recent history. Follow each artifact's convention if they differ, and use English when the convention is unclear.
+- Use Conventional Commits and keep the entire subject line under 72 characters, including the type and any scope.
 - When modifying AWS CDK or CloudFormation, write any `description` passed to AWS APIs in English and never include sensitive information.
 - Keep routine completion reports concise; add detail only when necessary.
